@@ -73,23 +73,11 @@ impl<T> WithDisplayContextExt<T> for T {
 pub struct SymbolTable {
     id_to_name: Vec<std::rc::Rc<str>>,
     name_to_id: std::collections::HashMap<std::rc::Rc<str>, SymbolId>,
-    id_to_core: std::collections::HashMap<SymbolId, CoreSymbol>,
 }
 
 impl SymbolTable {
     pub fn new() -> Self {
-        let mut table = Self {
-            id_to_name: Vec::new(),
-            name_to_id: std::collections::HashMap::new(),
-            id_to_core: std::collections::HashMap::new(),
-        };
-
-        for core_symbol in CoreSymbol::ALL {
-            let id = table.add_symbol(core_symbol.name());
-            table.id_to_core.insert(id, core_symbol);
-        }
-
-        table
+        Self { id_to_name: Vec::new(), name_to_id: std::collections::HashMap::new() }
     }
 
     pub fn add_symbol(&mut self, name: &str) -> SymbolId {
@@ -109,10 +97,6 @@ impl SymbolTable {
     pub fn get_symbol(&self, id: &SymbolId) -> Option<&str> {
         self.id_to_name.get(id.0).map(|s| s.as_ref())
     }
-
-    pub fn get_core_symbol(&self, id: &SymbolId) -> Option<CoreSymbol> {
-        self.id_to_core.get(id).copied()
-    }
 }
 
 pub trait SymbolTableOptionExt {
@@ -124,66 +108,3 @@ impl SymbolTableOptionExt for Option<&SymbolTable> {
         self.as_ref().and_then(|t| t.get_symbol(id))
     }
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CoreSymbol {
-    If,
-    Lambda,
-    Define,
-    Quote,
-    Null,
-    True,
-    False,
-}
-
-impl CoreSymbol {
-    pub const ALL: [Self; 7] = [
-        Self::If,
-        Self::Lambda,
-        Self::Define,
-        Self::Quote,
-        Self::Null,
-        Self::True,
-        Self::False,
-    ];
-
-    pub const fn name(self) -> &'static str {
-        match self {
-            Self::If => "if",
-            Self::Lambda => "lambda",
-            Self::Define => "define",
-            Self::Quote => "quote",
-            Self::Null => "null",
-            Self::True => "true",
-            Self::False => "false",
-        }
-    }
-}
-
-// #[derive(Debug, Clone)]
-// pub struct CoreSymbols {
-//     // syntax
-//     pub symbol_if: SymbolId,
-//     pub symbol_lambda: SymbolId,
-//     pub symbol_define: SymbolId,
-//     pub symbol_quote: SymbolId,
-//
-//     // values
-//     pub symbol_null: SymbolId,
-//     pub symbol_true: SymbolId,
-//     pub symbol_false: SymbolId,
-// }
-//
-// impl CoreSymbols {
-//     pub fn new(symbols: &mut SymbolTable) -> Self {
-//         Self {
-//             symbol_if: symbols.add_symbol("if"),
-//             symbol_lambda: symbols.add_symbol("lambda"),
-//             symbol_define: symbols.add_symbol("define"),
-//             symbol_quote: symbols.add_symbol("quote"),
-//             symbol_null: symbols.add_symbol("null"),
-//             symbol_true: symbols.add_symbol("true"),
-//             symbol_false: symbols.add_symbol("false"),
-//         }
-//     }
-// }

@@ -6,3 +6,4 @@ pub use crate::parsing::parser::*;
 pub use crate::parsing::syntax::*;
 pub use crate::span::*;
 pub use crate::symbol::*;
+pub use crate::value::*;

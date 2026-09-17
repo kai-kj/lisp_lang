@@ -29,15 +29,15 @@ impl<'source> Lexer<'source> {
         match self.current() {
             Some('(') => {
                 self.advance();
-                make_token!(start_pos, start_pos, ParenLeft)
+                make_token!(start_pos, start_pos + 1, ParenLeft)
             }
             Some(')') => {
                 self.advance();
-                make_token!(start_pos, start_pos, ParenRight)
+                make_token!(start_pos, start_pos + 1, ParenRight)
             }
             Some('\'') => {
                 self.advance();
-                make_token!(start_pos, start_pos, Quote)
+                make_token!(start_pos, start_pos + 1, Quote)
             }
             Some('"') => {
                 self.advance();
@@ -55,7 +55,7 @@ impl<'source> Lexer<'source> {
                         _ => self.advance(),
                     }
                 }
-                Err(LexerError::UnterminatedString.span_between(start_pos, self.pos - 1))
+                Err(LexerError::UnterminatedString.span_between(start_pos, self.pos))
             }
             Some(_) => {
                 self.advance_while(|_, c| {
@@ -155,7 +155,7 @@ mod tests {
             token_list!(Symbol(r#"+"#), Symbol(r#"-"#), Symbol(r#"foo"#), Symbol(r#"bar"#))
         );
     }
-    
+
     #[test]
     fn test_int() {
         assert_eq!(
@@ -208,7 +208,7 @@ mod tests {
     fn test_string_unterminated() {
         assert_eq!(
             lex_str_to_owned_vec(r#""Hello, world!"#),
-            Err(LexerError::UnterminatedString.span_between(0, 13))
+            Err(LexerError::UnterminatedString.span_between(0, 14))
         );
     }
 }

@@ -18,27 +18,18 @@ impl Lowerer {
     pub fn lower_expression(
         &self,
         symbol_table: &mut SymbolTable,
-        syntax: &SSyntax,
+        s: &SSyntax,
     ) -> Result<SExpression, SLowererError> {
-        Ok(match &syntax.value {
-            Syntax::Boolean(value) => Expression::Literal(Value::Boolean(*value)),
-            Syntax::Integer(value) => Expression::Literal(Value::Integer(*value)),
-            Syntax::Float(value) => Expression::Literal(Value::Float(*value)),
-            Syntax::String(value) => Expression::Literal(Value::String(value.clone())),
-            Syntax::Symbol(symbol) => match symbol_table.get_core_symbol(symbol) {
-                Some(CoreSymbol::Null) => Expression::Literal(Value::Null),
-                Some(CoreSymbol::True) => Expression::Literal(Value::Boolean(true)),
-                Some(CoreSymbol::False) => Expression::Literal(Value::Boolean(false)),
-                Some(_) => {
-                    return Err(LowererError::InvalidCallName.span(syntax.span));
-                }
-                None => Expression::Variable(*symbol),
-            },
-            Syntax::List(items) => {
-                return self.lower_list(symbol_table, &items, syntax.span);
-            }
+        match &s.value {
+            Syntax::Null => Ok(Expression::Literal(Value::Null).span(s.span)),
+            Syntax::Symbol(v) => Ok(Expression::Variable(*v).span(s.span)),
+            Syntax::Boolean(v) => Ok(Expression::Literal(Value::Boolean(*v)).span(s.span)),
+            Syntax::Integer(v) => Ok(Expression::Literal(Value::Integer(*v)).span(s.span)),
+            Syntax::Float(v) => Ok(Expression::Literal(Value::Float(*v)).span(s.span)),
+            Syntax::String(v) => Ok(Expression::Literal(Value::String(v.clone())).span(s.span)),
+            Syntax::List(v) => self.lower_list(symbol_table, &v, s.span),
+            _ => Err(LowererError::UnexpectedExpression.span(s.span)),
         }
-        .span(syntax.span))
     }
 
     fn lower_list(
@@ -50,12 +41,9 @@ impl Lowerer {
         let [head, rest @ ..] = items else {
             return Ok(Expression::Literal(Value::Null).span(parent_span));
         };
-        let head_span = head.span;
-        let Syntax::Symbol(head) = head.value else {
-            return Err(LowererError::InvalidCallName.span(head_span));
-        };
-        match symbol_table.get_core_symbol(&head) {
-            Some(CoreSymbol::If) => {
+
+        match head.value {
+            Syntax::If => {
                 let [condition, then_branch, else_branch] = rest else {
                     return Err(LowererError::InvalidIf.span(parent_span));
                 };
@@ -66,7 +54,7 @@ impl Lowerer {
                 }
                 .span(parent_span))
             }
-            Some(CoreSymbol::Lambda) => {
+            Syntax::Lambda => {
                 let [args, body @ ..] = rest else {
                     return Err(LowererError::InvalidLambda.span(parent_span));
                 };
@@ -89,7 +77,7 @@ impl Lowerer {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Expression::Lambda { args, body }.span(parent_span))
             }
-            Some(CoreSymbol::Define) => {
+            Syntax::Define => {
                 let [name, value] = rest else {
                     return Err(LowererError::InvalidDefine.span(parent_span));
                 };
@@ -102,18 +90,16 @@ impl Lowerer {
                 }
                 .span(parent_span))
             }
-            Some(CoreSymbol::Quote) => Err(LowererError::QuoteUnsupported.span(parent_span)),
-            Some(_) => {
-                return Err(LowererError::InvalidCallName.span(head_span));
-            }
-            None => Ok(Expression::Call {
-                name: head,
+            Syntax::Quote => panic!("quote is not supported yet"),
+            Syntax::Symbol(name) => Ok(Expression::Call {
+                name,
                 args: rest
                     .iter()
                     .map(|expr| self.lower_expression(symbol_table, expr))
                     .collect::<Result<Vec<_>, _>>()?,
             }
             .span(parent_span)),
+            _ => Err(LowererError::InvalidCallName.span(head.span)),
         }
     }
 }
@@ -123,6 +109,7 @@ pub type SLowererError = Spanned<LowererError>;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LowererError {
     ParseError(ParserError),
+    UnexpectedExpression,
     InvalidIf,
     InvalidLambda,
     InvalidLambdaArgs,
@@ -130,7 +117,6 @@ pub enum LowererError {
     InvalidLambdaBody,
     InvalidDefine,
     InvalidDefineName,
-    QuoteUnsupported,
     InvalidCallName,
 }
 
@@ -200,5 +186,78 @@ mod tests {
     #[test]
     fn test_lower_define() {
         assert_eq!(lower_str("(define x 42)"), expression_list!(Define("x"; Literal(Integer(42)))))
+    }
+
+    #[test]
+    fn test_lower_parser_error() {
+        assert_eq!(
+            lower_str("("),
+            Err(LowererError::ParseError(ParserError::MissingRightParen).span_between(0, 0))
+        );
+    }
+
+    #[test]
+    fn test_lower_unexpected_expression() {
+        assert_eq!(lower_str("if"), Err(LowererError::UnexpectedExpression.span_between(0, 2)));
+    }
+
+    #[test]
+    fn test_lower_invalid_if_a() {
+        assert_eq!(lower_str("(if true)"), Err(LowererError::InvalidIf.span_between(0, 9)));
+    }
+
+    #[test]
+    fn test_lower_invalid_if_b() {
+        assert_eq!(lower_str("(if true 4)"), Err(LowererError::InvalidIf.span_between(0, 11)));
+    }
+
+    #[test]
+    fn test_lower_invalid_lambda() {
+        assert_eq!(lower_str("(lambda)"), Err(LowererError::InvalidLambda.span_between(0, 8)));
+    }
+
+    #[test]
+    fn test_lower_invalid_lambda_args() {
+        assert_eq!(
+            lower_str("(lambda a a)"),
+            Err(LowererError::InvalidLambdaArgs.span_between(8, 9))
+        );
+    }
+
+    #[test]
+    fn test_lower_invalid_lambda_arg() {
+        assert_eq!(
+            lower_str("(lambda (3) 3)"),
+            Err(LowererError::InvalidLambdaArg.span_between(9, 10))
+        );
+    }
+
+    #[test]
+    fn test_lower_invalid_lambda_body() {
+        assert_eq!(
+            lower_str("(lambda (a))"),
+            Err(LowererError::InvalidLambdaBody.span_between(0, 12))
+        );
+    }
+
+    #[test]
+    fn test_lower_invalid_define() {
+        assert_eq!(lower_str("(define a)"), Err(LowererError::InvalidDefine.span_between(0, 10)));
+    }
+
+    #[test]
+    fn test_lower_invalid_define_name() {
+        assert_eq!(
+            lower_str(r#"(define "a" 42)"#),
+            Err(LowererError::InvalidDefineName.span_between(8, 11))
+        );
+    }
+
+    #[test]
+    fn test_lower_invalid_call_name() {
+        assert_eq!(
+            lower_str("(42)"),
+            Err(LowererError::InvalidCallName.span_between(1, 3))
+        );
     }
 }

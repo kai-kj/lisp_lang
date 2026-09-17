@@ -4,6 +4,7 @@ mod parsing;
 mod prelude;
 mod span;
 mod symbol;
+mod value;
 
 use crate::prelude::*;
 

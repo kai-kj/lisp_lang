@@ -31,12 +31,8 @@ pub trait SpannedExt: Sized {
         Spanned { value: self, span }
     }
 
-    fn span_at(self, start: usize) -> Spanned<Self> {
-        self.span_between(start, start)
-    }
-
     fn span_between(self, start: usize, end: usize) -> Spanned<Self> {
-        Spanned { value: self, span: Some(Span { start, end: end.max(start) }) }
+        Spanned { value: self, span: Some(Span { start, end: end.max(start + 1) }) }
     }
 
     fn span_join(self, start: Option<Span>, end: Option<Span>) -> Spanned<Self> {

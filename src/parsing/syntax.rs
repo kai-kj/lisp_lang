@@ -4,6 +4,11 @@ pub type SSyntax = Spanned<Syntax>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Syntax {
+    If,
+    Lambda,
+    Define,
+    Quote,
+    Null,
     Symbol(SymbolId),
     Boolean(bool),
     Integer(i64),
@@ -16,6 +21,11 @@ impl<'a> std::fmt::Display for WithDisplayContext<'a, SSyntax> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.make_indent())?;
         match &self.value.value {
+            Syntax::If => write!(f, "If"),
+            Syntax::Lambda => write!(f, "Lambda"),
+            Syntax::Define => write!(f, "Define"),
+            Syntax::Quote => write!(f, "Quote"),
+            Syntax::Null => write!(f, "Null"),
             Syntax::Symbol(v) => write!(f, "Symbol({})", v.context(self).no_indent()),
             Syntax::Boolean(v) => write!(f, "Boolean({})", v),
             Syntax::Integer(v) => write!(f, "Integer({})", v),

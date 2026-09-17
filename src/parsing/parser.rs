@@ -25,6 +25,8 @@ impl<'source> Parser<'source> {
         symbol_table: &mut SymbolTable,
     ) -> Result<Option<SSyntax>, SParserError> {
         let first_token = self.lexer.next()?;
+        let mut last_span = first_token.span;
+
         let kind = match first_token.value {
             Token::End => return Ok(None),
             Token::ParenLeft => {
@@ -33,6 +35,7 @@ impl<'source> Parser<'source> {
                     match self.lexer.peek()? {
                         next_token if next_token.value == Token::ParenRight => {
                             self.lexer.next()?;
+                            last_span = next_token.span;
                             break;
                         }
                         next_token if next_token.value == Token::End => {
@@ -56,7 +59,16 @@ impl<'source> Parser<'source> {
                 self.parse_expression(symbol_table)?
                     .ok_or(ParserError::NothingToQuote.span(first_token.span))?,
             ]),
-            Token::Symbol(name) => Syntax::Symbol(symbol_table.add_symbol(name)),
+            Token::Symbol(name) => match name {
+                "if" => Syntax::If,
+                "lambda" => Syntax::Lambda,
+                "define" => Syntax::Define,
+                "quote" => Syntax::Quote,
+                "null" => Syntax::Null,
+                "true" => Syntax::Boolean(true),
+                "false" => Syntax::Boolean(false),
+                _ => Syntax::Symbol(symbol_table.add_symbol(name)),
+            },
             Token::Integer(value) => Syntax::Integer(value),
             Token::Float(value) => Syntax::Float(value),
             Token::String(value) => {
@@ -91,7 +103,7 @@ impl<'source> Parser<'source> {
                 Syntax::String(string)
             }
         };
-        Ok(Some(kind.span_join(first_token.span, self.lexer.peek()?.span)))
+        Ok(Some(kind.span_join(first_token.span, last_span)))
     }
 }
 
@@ -171,38 +183,38 @@ mod tests {
 
     #[test]
     fn test_list_span_a() {
-        assert_eq!(parse_str(r#"(    )"#), Ok(vec![Syntax::List(vec![]).span_between(0, 5)]),)
+        assert_eq!(parse_str(r#"(    )"#), Ok(vec![Syntax::List(vec![]).span_between(0, 6)]),)
     }
 
     #[test]
     fn test_list_span_b() {
-        assert_eq!(parse_str(r#"(    ) "#), Ok(vec![Syntax::List(vec![]).span_between(0, 5)]),)
+        assert_eq!(parse_str(r#"(    ) "#), Ok(vec![Syntax::List(vec![]).span_between(0, 6)]),)
     }
 
     #[test]
     fn test_lexer_error() {
         assert_eq!(
             parse_str(r#""Hello, world!"#),
-            Err(LexerError::UnterminatedString.span_between(0, 13).into())
+            Err(LexerError::UnterminatedString.span_between(0, 14).into())
         );
     }
 
     #[test]
     fn test_parse_missing_right_paren() {
-        assert_eq!(parse_str(r#"()(()"#), Err(ParserError::MissingRightParen.span_between(2, 4)))
+        assert_eq!(parse_str(r#"()(()"#), Err(ParserError::MissingRightParen.span_between(2, 5)))
     }
 
     #[test]
     fn test_parse_unexpected_right_paren() {
         assert_eq!(
             parse_str(r#"()(()))"#),
-            Err(ParserError::UnexpectedRightParen.span_between(6, 6))
+            Err(ParserError::UnexpectedRightParen.span_between(6, 7))
         )
     }
 
     #[test]
     fn test_parse_nothing_to_quote() {
-        assert_eq!(parse_str(r#"'()'"#), Err(ParserError::NothingToQuote.span_between(3, 3)))
+        assert_eq!(parse_str(r#"'()'"#), Err(ParserError::NothingToQuote.span_between(3, 4)))
     }
 
     #[test]
