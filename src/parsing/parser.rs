@@ -1,18 +1,26 @@
-use crate::prelude::*;
+use crate::{
+    lexing::{
+        lexer::{Lexer, LexerError, SLexerError},
+        token::Token,
+    },
+    parsing::syntax::{SSyntax, Syntax},
+    span::{Spanned, SpannedExt},
+    symbol::SymbolTable,
+};
 
-pub struct Parser<'source> {
-    lexer: Lexer<'source>,
+pub struct Parser<'table> {
+    symbol_table: &'table mut SymbolTable,
 }
 
-impl<'source> Parser<'source> {
-    pub fn new(source: &'source str) -> Self {
-        Self { lexer: Lexer::new(source) }
+impl<'table> Parser<'table> {
+    pub fn new(symbol_table: &'table mut SymbolTable) -> Self {
+        Self { symbol_table }
     }
 
-    pub fn parse(&mut self, symbol_table: &mut SymbolTable) -> Result<Vec<SSyntax>, SParserError> {
+    pub fn parse(&mut self, lexer: &mut Lexer) -> Result<Vec<SSyntax>, SParserError> {
         let mut expressions = Vec::new();
         loop {
-            match self.parse_expression(symbol_table) {
+            match Self::parse_expression(&mut self.symbol_table, lexer) {
                 Ok(Some(expression)) => expressions.push(expression),
                 Ok(None) => return Ok(expressions),
                 Err(err) => return Err(err),
@@ -21,10 +29,10 @@ impl<'source> Parser<'source> {
     }
 
     pub fn parse_expression(
-        &mut self,
         symbol_table: &mut SymbolTable,
+        lexer: &mut Lexer,
     ) -> Result<Option<SSyntax>, SParserError> {
-        let first_token = self.lexer.next()?;
+        let first_token = lexer.next()?;
         let mut last_span = first_token.span;
 
         let kind = match first_token.value {
@@ -32,9 +40,9 @@ impl<'source> Parser<'source> {
             Token::ParenLeft => {
                 let mut items = Vec::new();
                 loop {
-                    match self.lexer.peek()? {
+                    match lexer.peek()? {
                         next_token if next_token.value == Token::ParenRight => {
-                            self.lexer.next()?;
+                            lexer.next()?;
                             last_span = next_token.span;
                             break;
                         }
@@ -43,7 +51,7 @@ impl<'source> Parser<'source> {
                                 .span_join(first_token.span, next_token.span));
                         }
                         _ => {
-                            if let Some(expression) = self.parse_expression(symbol_table)? {
+                            if let Some(expression) = Self::parse_expression(symbol_table, lexer)? {
                                 items.push(expression);
                             }
                         }
@@ -56,12 +64,12 @@ impl<'source> Parser<'source> {
             }
             Token::Quote => Syntax::List(vec![
                 Syntax::Symbol(symbol_table.add_symbol("quote")).span(first_token.span),
-                self.parse_expression(symbol_table)?
+                Self::parse_expression(symbol_table, lexer)?
                     .ok_or(ParserError::NothingToQuote.span(first_token.span))?,
             ]),
             Token::Symbol(name) => match name {
                 "if" => Syntax::If,
-                "lambda" => Syntax::Lambda,
+                "fn" => Syntax::Function,
                 "define" => Syntax::Define,
                 "quote" => Syntax::Quote,
                 "null" => Syntax::Null,
@@ -126,18 +134,44 @@ impl From<SLexerError> for SParserError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {super::*, crate::display::WithDisplayContextExt};
+
+    macro_rules! syntax_list {
+        ($($kind:ident ($($args:tt)*)),* $(,)?) => {{
+            let mut _symbol_table = SymbolTable::new();
+            Ok(syntax_list!(_symbol_table; $($kind($($args)*)),*))
+        }};
+
+        ($table:ident; $($kind:ident ($($args:tt)*)),* $(,)?) => {{
+            let _symbol_table = &mut $table;
+            vec![$(syntax_list!(@kind _symbol_table; $kind($($args)*))),*]
+        }};
+
+        (@kind $table:ident; Symbol($value:expr)) => {
+            Syntax::Symbol($table.add_symbol($value)).span_none()
+        };
+
+        (@kind $table:ident; List($($kind:ident ($($args:tt)*)),* $(,)?)) => {
+            Syntax::List(vec![$(syntax_list!(@kind $table; $kind($($args)*))),*]).span_none()
+        };
+
+        (@kind $table:ident; $kind:ident($value:expr)) => {
+            Syntax::$kind($value.into()).span_none()
+        };
+    }
 
     fn parse_str(source: &str) -> Result<Vec<SSyntax>, SParserError> {
         let mut symbol_table = SymbolTable::new();
-        let mut parser = Parser::new(source);
-        let symbol_list = parser.parse(&mut symbol_table)?;
+        let mut lexer = Lexer::new(source);
 
-        for symbol in &symbol_list {
-            println!("{}", symbol.with_symbols(&symbol_table).set_indent(2));
+        let mut parser = Parser::new(&mut symbol_table);
+        let syntax_list = parser.parse(&mut lexer)?;
+
+        for syntax in &syntax_list {
+            println!("{}", syntax.with_symbols(&symbol_table).set_indent(2));
         }
 
-        Ok(symbol_list)
+        Ok(syntax_list)
     }
 
     #[test]

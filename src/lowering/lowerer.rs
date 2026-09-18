@@ -1,22 +1,31 @@
-use crate::prelude::*;
+use crate::{
+    lowering::expression::{Expression, SExpression},
+    parsing::{
+        parser::{ParserError, SParserError},
+        syntax::{SSyntax, Syntax},
+    },
+    runtime::value::Value,
+    span::{Span, Spanned, SpannedExt},
+    symbol::SymbolTable,
+};
 
-pub struct Lowerer {}
+pub struct Lowerer<'table> {
+    symbol_table: &'table mut SymbolTable,
+}
 
-impl Lowerer {
-    pub fn new() -> Self {
-        Self {}
+impl<'table> Lowerer<'table> {
+    pub fn new(symbol_table: &'table mut SymbolTable) -> Self {
+        Self { symbol_table }
     }
 
-    pub fn lower(
-        &self,
-        symbol_table: &mut SymbolTable,
-        syntax: &Vec<SSyntax>,
-    ) -> Result<Vec<SExpression>, SLowererError> {
-        syntax.into_iter().map(|syntax| self.lower_expression(symbol_table, &syntax)).collect()
+    pub fn lower(&mut self, syntax: &Vec<SSyntax>) -> Result<Vec<SExpression>, SLowererError> {
+        syntax
+            .into_iter()
+            .map(|syntax| Self::lower_expression(&mut self.symbol_table, &syntax))
+            .collect()
     }
 
     pub fn lower_expression(
-        &self,
         symbol_table: &mut SymbolTable,
         s: &SSyntax,
     ) -> Result<SExpression, SLowererError> {
@@ -27,13 +36,12 @@ impl Lowerer {
             Syntax::Integer(v) => Ok(Expression::Literal(Value::Integer(*v)).span(s.span)),
             Syntax::Float(v) => Ok(Expression::Literal(Value::Float(*v)).span(s.span)),
             Syntax::String(v) => Ok(Expression::Literal(Value::String(v.clone())).span(s.span)),
-            Syntax::List(v) => self.lower_list(symbol_table, &v, s.span),
+            Syntax::List(v) => Self::lower_list(symbol_table, &v, s.span),
             _ => Err(LowererError::UnexpectedExpression.span(s.span)),
         }
     }
 
     fn lower_list(
-        &self,
         symbol_table: &mut SymbolTable,
         items: &[SSyntax],
         parent_span: Option<Span>,
@@ -48,34 +56,34 @@ impl Lowerer {
                     return Err(LowererError::InvalidIf.span(parent_span));
                 };
                 Ok(Expression::If {
-                    cond: Box::new(self.lower_expression(symbol_table, condition)?),
-                    t_branch: Box::new(self.lower_expression(symbol_table, then_branch)?),
-                    f_branch: Box::new(self.lower_expression(symbol_table, else_branch)?),
+                    cond: Box::new(Self::lower_expression(symbol_table, condition)?),
+                    t_branch: Box::new(Self::lower_expression(symbol_table, then_branch)?),
+                    f_branch: Box::new(Self::lower_expression(symbol_table, else_branch)?),
                 }
-                .span(parent_span))
+                    .span(parent_span))
             }
-            Syntax::Lambda => {
+            Syntax::Function => {
                 let [args, body @ ..] = rest else {
-                    return Err(LowererError::InvalidLambda.span(parent_span));
+                    return Err(LowererError::InvalidFunction.span(parent_span));
                 };
                 let Syntax::List(args) = &args.value else {
-                    return Err(LowererError::InvalidLambdaArgs.span(args.span));
+                    return Err(LowererError::InvalidFunctionArgs.span(args.span));
                 };
                 let args = args
                     .iter()
                     .map(|arg| match arg.value {
                         Syntax::Symbol(symbol) => Ok(symbol),
-                        _ => Err(LowererError::InvalidLambdaArg.span(arg.span)),
+                        _ => Err(LowererError::InvalidFunctionArg.span(arg.span)),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 if body.is_empty() {
-                    return Err(LowererError::InvalidLambdaBody.span(parent_span));
+                    return Err(LowererError::InvalidFunctionBody.span(parent_span));
                 }
                 let body = body
                     .iter()
-                    .map(|expr| self.lower_expression(symbol_table, expr))
+                    .map(|expr| Self::lower_expression(symbol_table, expr))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Expression::Lambda { args, body }.span(parent_span))
+                Ok(Expression::Function { args, body }.span(parent_span))
             }
             Syntax::Define => {
                 let [name, value] = rest else {
@@ -86,20 +94,20 @@ impl Lowerer {
                 };
                 Ok(Expression::Define {
                     name,
-                    value: Box::new(self.lower_expression(symbol_table, value)?),
-                }
-                .span(parent_span))
+                    value: Box::new(Self::lower_expression(symbol_table, value)?),
+                }.span(parent_span))
             }
             Syntax::Quote => panic!("quote is not supported yet"),
-            Syntax::Symbol(name) => Ok(Expression::Call {
-                name,
-                args: rest
-                    .iter()
-                    .map(|expr| self.lower_expression(symbol_table, expr))
-                    .collect::<Result<Vec<_>, _>>()?,
+            Syntax::Symbol(_) | Syntax::List(_) => {
+                Ok(Expression::Call {
+                    call: Box::new(Self::lower_expression(symbol_table, head)?),
+                    args: rest
+                        .iter()
+                        .map(|expr| Self::lower_expression(symbol_table, expr))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }.span(parent_span))
             }
-            .span(parent_span)),
-            _ => Err(LowererError::InvalidCallName.span(head.span)),
+            _ => Err(LowererError::InvalidCall.span(head.span)),
         }
     }
 }
@@ -111,13 +119,13 @@ pub enum LowererError {
     ParseError(ParserError),
     UnexpectedExpression,
     InvalidIf,
-    InvalidLambda,
-    InvalidLambdaArgs,
-    InvalidLambdaArg,
-    InvalidLambdaBody,
+    InvalidFunction,
+    InvalidFunctionArgs,
+    InvalidFunctionArg,
+    InvalidFunctionBody,
     InvalidDefine,
     InvalidDefineName,
-    InvalidCallName,
+    InvalidCall,
 }
 
 impl From<SParserError> for SLowererError {
@@ -128,14 +136,98 @@ impl From<SParserError> for SLowererError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        crate::{
+            display::WithDisplayContextExt,
+            lexing::lexer::Lexer,
+            parsing::parser::{Parser, ParserError},
+            runtime::value::Value,
+            span::SpannedExt,
+            symbol::SymbolTable,
+        },
+    };
+
+    macro_rules! expression_list {
+        ($($kind:ident $args:tt),* $(,)?) => {{
+            let mut _symbol_table = SymbolTable::new();
+            Ok(expression_list!(_symbol_table; $($kind $args),*))
+        }};
+
+        ($table:ident; $($kind:ident $args:tt),* $(,)?) => {{
+            let _symbol_table = &mut $table;
+            vec![$(expression_list!(@expr _symbol_table; $kind $args)),*]
+        }};
+
+        (@expr $table:ident; Literal(Null)) => { Expression::Literal(Value::Null).span_none() };
+
+        (@expr $table:ident; Literal(Symbol($value:expr))) => {
+            Expression::Literal(Value::Symbol($table.add_symbol($value))).span_none()
+        };
+
+        (@expr $table:ident; Literal($kind:ident($value:expr))) => {
+            Expression::Literal(Value::$kind($value).into()).span_none()
+        };
+
+        (@expr $table:ident; Variable($name:expr)) => {
+            Expression::Variable($table.add_symbol($name)).span_none()
+        };
+
+        (@expr $table:ident; Call($call_kind:ident $call_args:tt $(, $kind:ident $args:tt)* $(,)?)) => {
+            Expression::Call {
+                call: Box::new(expression_list!(@expr $table; $call_kind $call_args)),
+                args: vec![$(expression_list!(@expr $table; $kind $args)),*],
+            }.span_none()
+        };
+
+        (@expr $table:ident; If(
+            $cond_kind:ident $cond_args:tt,
+            $t_kind:ident $t_args:tt,
+            $f_kind:ident $f_args:tt
+        )) => {
+            Expression::If {
+                cond: Box::new(expression_list!(@expr $table; $cond_kind $cond_args)),
+                t_branch: Box::new(expression_list!(@expr $table; $t_kind $t_args)),
+                f_branch: Box::new(expression_list!(@expr $table; $f_kind $f_args)),
+            }.span_none()
+        };
+
+        (@expr $table:ident; Function(
+            ($($arg:expr),* $(,)?),
+            $($kind:ident $args:tt),* $(,)?
+        )) => {
+            Expression::Function {
+                args: vec![
+                    $($table.add_symbol($arg)),*
+                ],
+                body: vec![
+                    $(expression_list!(@expr $table; $kind $args)),*
+                ],
+            }.span_none()
+        };
+
+        (@expr $table:ident; Define(
+            $name:expr,
+            $kind:ident $args:tt
+        )) => {
+            Expression::Define {
+                name: $table.add_symbol($name),
+                value: Box::new(
+                    expression_list!(@expr $table; $kind $args)
+                ),
+            }.span_none()
+        };
+    }
 
     fn lower_str(source: &str) -> Result<Vec<SExpression>, SLowererError> {
         let mut symbol_table = SymbolTable::new();
-        let mut parser = Parser::new(source);
-        let lowerer = Lowerer::new();
-        let syntax_list = parser.parse(&mut symbol_table)?;
-        let expression_list = lowerer.lower(&mut symbol_table, &syntax_list)?;
+        let mut lexer = Lexer::new(source);
+
+        let mut parser = Parser::new(&mut symbol_table);
+        let syntax_list = parser.parse(&mut lexer)?;
+
+        let mut lowerer = Lowerer::new(&mut symbol_table);
+        let expression_list = lowerer.lower(&syntax_list)?;
 
         for expression in &expression_list {
             println!("{}", expression.with_symbols(&symbol_table).set_indent(2));
@@ -163,7 +255,7 @@ mod tests {
     fn test_lower_call() {
         assert_eq!(
             lower_str("(+ 1 2)"),
-            expression_list!(Call("+"; Literal(Integer(1)), Literal(Integer(2))))
+            expression_list!(Call(Variable("+"), Literal(Integer(1)), Literal(Integer(2))))
         );
     }
 
@@ -171,21 +263,25 @@ mod tests {
     fn test_lower_if() {
         assert_eq!(
             lower_str("(if true 4 2)"),
-            expression_list!(If(Literal(Boolean(true)); Literal(Integer(4)); Literal(Integer(2))))
+            expression_list!(If(Literal(Boolean(true)), Literal(Integer(4)), Literal(Integer(2))))
         );
     }
 
     #[test]
-    fn test_lower_lambda() {
+    fn test_lower_function() {
         assert_eq!(
-            lower_str("(lambda (a b) (print a) (+ a b))"),
-            expression_list!(Lambda(("a", "b"); Call("print"; Variable("a")), Call("+"; Variable("a"), Variable("b"))))
+            lower_str("(fn (a b) (print a) (+ a b))"),
+            expression_list!(Function(
+                ("a", "b"),
+                Call(Variable("print"), Variable("a")),
+                Call(Variable("+"), Variable("a"), Variable("b"))
+            ))
         );
     }
 
     #[test]
     fn test_lower_define() {
-        assert_eq!(lower_str("(define x 42)"), expression_list!(Define("x"; Literal(Integer(42)))))
+        assert_eq!(lower_str("(define x 42)"), expression_list!(Define("x", Literal(Integer(42)))))
     }
 
     #[test]
@@ -212,31 +308,31 @@ mod tests {
     }
 
     #[test]
-    fn test_lower_invalid_lambda() {
-        assert_eq!(lower_str("(lambda)"), Err(LowererError::InvalidLambda.span_between(0, 8)));
+    fn test_lower_invalid_function() {
+        assert_eq!(lower_str("(fn)"), Err(LowererError::InvalidFunction.span_between(0, 4)));
     }
 
     #[test]
-    fn test_lower_invalid_lambda_args() {
+    fn test_lower_invalid_function_args() {
         assert_eq!(
-            lower_str("(lambda a a)"),
-            Err(LowererError::InvalidLambdaArgs.span_between(8, 9))
+            lower_str("(fn a a)"),
+            Err(LowererError::InvalidFunctionArgs.span_between(4, 5))
         );
     }
 
     #[test]
-    fn test_lower_invalid_lambda_arg() {
+    fn test_lower_invalid_function_arg() {
         assert_eq!(
-            lower_str("(lambda (3) 3)"),
-            Err(LowererError::InvalidLambdaArg.span_between(9, 10))
+            lower_str("(fn (3) 3)"),
+            Err(LowererError::InvalidFunctionArg.span_between(5, 6))
         );
     }
 
     #[test]
-    fn test_lower_invalid_lambda_body() {
+    fn test_lower_invalid_function_body() {
         assert_eq!(
-            lower_str("(lambda (a))"),
-            Err(LowererError::InvalidLambdaBody.span_between(0, 12))
+            lower_str("(fn (a))"),
+            Err(LowererError::InvalidFunctionBody.span_between(0, 8))
         );
     }
 
@@ -255,9 +351,6 @@ mod tests {
 
     #[test]
     fn test_lower_invalid_call_name() {
-        assert_eq!(
-            lower_str("(42)"),
-            Err(LowererError::InvalidCallName.span_between(1, 3))
-        );
+        assert_eq!(lower_str("(42)"), Err(LowererError::InvalidCall.span_between(1, 3)));
     }
 }

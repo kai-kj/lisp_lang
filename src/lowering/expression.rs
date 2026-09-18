@@ -1,4 +1,9 @@
-use crate::prelude::*;
+use crate::{
+    display::{WithDisplayContext, WithDisplayContextExt},
+    runtime::value::Value,
+    span::Spanned,
+    symbol::SymbolId,
+};
 
 pub type SExpression = Spanned<Expression>;
 
@@ -7,7 +12,7 @@ pub enum Expression {
     Literal(Value),
     Variable(SymbolId),
     Call {
-        name: SymbolId,
+        call: Box<SExpression>,
         args: Vec<SExpression>,
     },
     If {
@@ -15,7 +20,7 @@ pub enum Expression {
         t_branch: Box<SExpression>,
         f_branch: Box<SExpression>,
     },
-    Lambda {
+    Function {
         args: Vec<SymbolId>,
         body: Vec<SExpression>,
     },
@@ -29,15 +34,15 @@ impl<'a> std::fmt::Display for WithDisplayContext<'a, SExpression> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.make_indent())?;
         match (&self.value.value, self.indent_size) {
-            (Expression::Literal(v), _) => write!(f, "Literal({})", v.context(self).no_indent()),
+            (Expression::Literal(v), _) => write!(f, "Literal({})", v),
             (Expression::Variable(v), _) => write!(f, "Variable({})", v.context(self).no_indent()),
-            (Expression::Call { name, args }, None) => {
+            (Expression::Call { call, args }, None) => {
                 let args = args.iter().map(|c| format!("{}", c.context(self))).collect::<Vec<_>>();
-                write!(f, "Call({}, {})", name.context(self), args.join(", "))
+                write!(f, "Call({}, {})", call.as_ref().context(self), args.join(", "))
             }
-            (Expression::Call { name, args }, Some(indent_size)) => {
+            (Expression::Call { call, args }, Some(indent_size)) => {
                 writeln!(f, "Call(")?;
-                writeln!(f, "{},", name.context(self).indent())?;
+                writeln!(f, "{},", call.as_ref().context(self).indent())?;
                 args.iter().try_for_each(|c| writeln!(f, "{},", c.context(self).indent()))?;
                 write!(f, "{})", " ".repeat(self.indent * indent_size))
             }
@@ -57,14 +62,14 @@ impl<'a> std::fmt::Display for WithDisplayContext<'a, SExpression> {
                 writeln!(f, "{},", f_branch.as_ref().context(self).indent())?;
                 write!(f, "{})", " ".repeat(self.indent * indent_size))
             }
-            (Expression::Lambda { args, body }, None) => {
+            (Expression::Function { args, body }, None) => {
                 let args = args.iter().map(|c| format!("{}", c.context(self))).collect::<Vec<_>>();
                 let body = body.iter().map(|c| format!("{}", c.context(self))).collect::<Vec<_>>();
-                write!(f, "Lambda({}, {})", args.join(", "), body.join(", "))
+                write!(f, "Function({}, {})", args.join(", "), body.join(", "))
             }
-            (Expression::Lambda { args, body }, Some(indent_size)) => {
+            (Expression::Function { args, body }, Some(indent_size)) => {
                 let args = args.iter().map(|c| format!("{}", c.context(self))).collect::<Vec<_>>();
-                writeln!(f, "Lambda(")?;
+                writeln!(f, "Function(")?;
                 writeln!(
                     f,
                     "{}({}),",
@@ -86,79 +91,3 @@ impl<'a> std::fmt::Display for WithDisplayContext<'a, SExpression> {
         }
     }
 }
-
-#[macro_export]
-macro_rules! expression_list {
-    ($($kind:ident $args:tt),* $(,)?) => {{
-        let mut _symbol_table = SymbolTable::new();
-        Ok(expression_list!(_symbol_table; $($kind $args),*))
-    }};
-
-    ($table:ident; $($kind:ident $args:tt),* $(,)?) => {{
-        let _symbol_table = &mut $table;
-        vec![$(expression_list!(@expr _symbol_table; $kind $args)),*]
-    }};
-
-    (@expr $table:ident; Literal(Null)) => { Expression::Literal(Value::Null).span_none() };
-
-    (@expr $table:ident; Literal(Symbol($value:expr))) => {
-        Expression::Literal(Value::Symbol($table.add_symbol($value))).span_none()
-    };
-
-    (@expr $table:ident; Literal($kind:ident($value:expr))) => {
-        Expression::Literal(Value::$kind($value).into()).span_none()
-    };
-
-    (@expr $table:ident; Variable($name:expr)) => {
-        Expression::Variable($table.add_symbol($name)).span_none()
-    };
-
-    (@expr $table:ident; Call($name:expr; $($kind:ident $args:tt),* $(,)?)) => {
-        Expression::Call {
-            name: $table.add_symbol($name),
-            args: vec![$(expression_list!(@expr $table; $kind $args)),*],
-        }.span_none()
-    };
-
-    (@expr $table:ident; If(
-        $cond_kind:ident $cond_args:tt;
-        $t_kind:ident $t_args:tt;
-        $f_kind:ident $f_args:tt
-    )) => {
-        Expression::If {
-            cond: Box::new(expression_list!(@expr $table; $cond_kind $cond_args)),
-            t_branch: Box::new(expression_list!(@expr $table; $t_kind $t_args)),
-            f_branch: Box::new(expression_list!(@expr $table; $f_kind $f_args)),
-        }.span_none()
-    };
-
-    (@expr $table:ident; Lambda(
-        ($($arg:expr),* $(,)?);
-        $($kind:ident $args:tt),* $(,)?
-    )) => {
-        Expression::Lambda {
-            args: vec![
-                $($table.add_symbol($arg)),*
-            ],
-            body: vec![
-                $(expression_list!(@expr $table; $kind $args)),*
-            ],
-        }.span_none()
-    };
-
-    // ----- Define -----
-
-    (@expr $table:ident; Define(
-        $name:expr;
-        $kind:ident $args:tt
-    )) => {
-        Expression::Define {
-            name: $table.add_symbol($name),
-            value: Box::new(
-                expression_list!(@expr $table; $kind $args)
-            ),
-        }.span_none()
-    };
-}
-
-pub use expression_list;

@@ -1,9 +1,18 @@
-use crate::prelude::*;
+use crate::{
+    lexing::token::{SToken, Token},
+    span::{Spanned, SpannedExt},
+};
 
 pub struct Lexer<'source> {
     source: &'source str,
     pos: usize,
     next: Result<SToken<'source>, SLexerError>,
+}
+
+macro_rules! make_token {
+    ($start:expr, $end:expr, $kind:ident $(($value:expr))? ) => {
+        Ok(Token::$kind $(($value))?.span_between($start, $end))
+    };
 }
 
 impl<'source> Lexer<'source> {
@@ -119,7 +128,17 @@ pub enum LexerError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use {
+        super::*,
+        crate::lexing::owned_token::{OwnedToken, SOwnedToken},
+    };
+
+    macro_rules! token_list {
+        ($($kind:ident $(($value:expr))?),* $(,)?) => { Ok(vec![$(token_list!(@token $kind $(($value))?)),*]) };
+        (@token String($value:expr)) => { OwnedToken::String(($value).into()).span_none() };
+        (@token Symbol($value:expr)) => { OwnedToken::Symbol(($value).into()).span_none() };
+        (@token $kind:ident $(($value:expr))?) => { OwnedToken::$kind $(($value))?.span_none() };
+    }
 
     fn lex_str_to_owned_vec(source: &str) -> Result<Vec<SOwnedToken>, SLexerError> {
         let mut lexer = Lexer::new(&source);

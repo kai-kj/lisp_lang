@@ -1,11 +1,15 @@
-use crate::prelude::*;
+use crate::{
+    display::{WithDisplayContext, WithDisplayContextExt},
+    span::Spanned,
+    symbol::SymbolId,
+};
 
 pub type SSyntax = Spanned<Syntax>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Syntax {
     If,
-    Lambda,
+    Function,
     Define,
     Quote,
     Null,
@@ -22,7 +26,7 @@ impl<'a> std::fmt::Display for WithDisplayContext<'a, SSyntax> {
         write!(f, "{}", self.make_indent())?;
         match &self.value.value {
             Syntax::If => write!(f, "If"),
-            Syntax::Lambda => write!(f, "Lambda"),
+            Syntax::Function => write!(f, "Function"),
             Syntax::Define => write!(f, "Define"),
             Syntax::Quote => write!(f, "Quote"),
             Syntax::Null => write!(f, "Null"),
@@ -44,30 +48,3 @@ impl<'a> std::fmt::Display for WithDisplayContext<'a, SSyntax> {
         }
     }
 }
-
-#[macro_export]
-macro_rules! syntax_list {
-    ($($kind:ident ($($args:tt)*)),* $(,)?) => {{
-        let mut _symbol_table = SymbolTable::new();
-        Ok(syntax_list!(_symbol_table; $($kind($($args)*)),*))
-    }};
-
-    ($table:ident; $($kind:ident ($($args:tt)*)),* $(,)?) => {{
-        let _symbol_table = &mut $table;
-        vec![$(syntax_list!(@kind _symbol_table; $kind($($args)*))),*]
-    }};
-
-    (@kind $table:ident; Symbol($value:expr)) => {
-        Syntax::Symbol($table.add_symbol($value)).span_none()
-    };
-
-    (@kind $table:ident; List($($kind:ident ($($args:tt)*)),* $(,)?)) => {
-        Syntax::List(vec![$(syntax_list!(@kind $table; $kind($($args)*))),*]).span_none()
-    };
-
-    (@kind $table:ident; $kind:ident($value:expr)) => {
-        Syntax::$kind($value.into()).span_none()
-    };
-}
-
-pub use syntax_list;
