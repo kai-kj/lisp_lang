@@ -3,10 +3,10 @@ use crate::{
     span::{Spanned, SpannedExt},
 };
 
-pub struct Lexer<'source> {
-    source: &'source str,
+pub struct Lexer<'s> {
+    source: &'s str,
     pos: usize,
-    next: Result<SToken<'source>, SLexerError>,
+    next: Result<SToken<'s>, SLexerError>,
 }
 
 macro_rules! make_token {
@@ -15,23 +15,23 @@ macro_rules! make_token {
     };
 }
 
-impl<'source> Lexer<'source> {
-    pub fn new(source: &'source str) -> Self {
+impl<'s> Lexer<'s> {
+    pub fn new(source: &'s str) -> Self {
         let mut lexer = Self { source, pos: 0, next: Ok(Token::End.span_none()) };
         lexer.next = lexer.scan();
         lexer
     }
 
-    pub fn peek(&self) -> Result<SToken<'source>, SLexerError> {
+    pub fn peek(&self) -> Result<SToken<'s>, SLexerError> {
         self.next
     }
 
-    pub fn next(&mut self) -> Result<SToken<'source>, SLexerError> {
+    pub fn next(&mut self) -> Result<SToken<'s>, SLexerError> {
         let next = self.scan();
         std::mem::replace(&mut self.next, next)
     }
 
-    fn scan(&mut self) -> Result<SToken<'source>, SLexerError> {
+    fn scan(&mut self) -> Result<SToken<'s>, SLexerError> {
         self.advance_while(|_, c| c.is_whitespace());
         let start_pos = self.pos;
 

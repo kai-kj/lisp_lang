@@ -5,35 +5,30 @@ use crate::{
         value::{BuiltinFunction, UserFunction, Value},
     },
     span::SpannedExt,
-    symbol::{SymbolId, SymbolTable},
 };
 
-pub struct Interpreter<'table> {
-    symbol_table: &'table mut SymbolTable,
-    root_env: Environment<'table>,
+pub struct Interpreter<'e, 's> {
+    root_env: Environment<'e, 's>,
 }
 
-impl<'table> Interpreter<'table> {
-    pub fn new(
-        symbol_table: &'table mut SymbolTable,
-        builtins: &[(&'static str, BuiltinFunction)],
-    ) -> Result<Self, SRuntimeError> {
-        let mut interpreter = Self { symbol_table, root_env: Environment::new() };
+impl<'e, 's> Interpreter<'e, 's> {
+    pub fn new(builtins: &[(&'static str, BuiltinFunction<'s>)]) -> Result<Self, SRuntimeError> {
+        let mut interpreter = Self { root_env: Environment::new() };
 
         for builtin in builtins {
             interpreter
                 .root_env
-                .set(
-                    &interpreter.symbol_table.add_symbol(&builtin.0),
-                    Value::BuiltinFunction(builtin.1),
-                )
+                .set(&builtin.0, Value::BuiltinFunction(builtin.1))
                 .map_err(|e| e.span_none())?;
         }
 
         Ok(interpreter)
     }
 
-    pub fn interpret(&mut self, expression: &[SExpression]) -> Result<Value, SRuntimeError> {
+    pub fn interpret(
+        &mut self,
+        expression: Vec<SExpression<'s>>,
+    ) -> Result<Value<'s>, SRuntimeError> {
         let mut result = Value::Null;
         for expression in expression {
             result = Self::interpret_expression(expression, &mut self.root_env)?;
@@ -42,21 +37,23 @@ impl<'table> Interpreter<'table> {
     }
 
     fn interpret_expression(
-        expression: &SExpression,
-        env: &mut Environment,
-    ) -> Result<Value, SRuntimeError> {
-        match &expression.value {
-            Expression::Literal(v) => Ok(v.clone()),
+        expression: SExpression<'s>,
+        env: &mut Environment<'_, 's>,
+    ) -> Result<Value<'s>, SRuntimeError> {
+        match expression.value {
+            Expression::Literal(v) => Ok(v),
             Expression::Variable(v) => {
                 env.get(v).map(|v| v.clone()).map_err(|e| e.span(expression.span))
             }
             Expression::Call { call, args } => {
+                let call = Self::interpret_expression(*call, env)?;
+
                 let args = args
-                    .iter()
-                    .map(|a| Self::interpret_expression(a, &mut env.child()))
+                    .into_iter()
+                    .map(|a| Self::interpret_expression(a, env))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                match Self::interpret_expression(call, &mut env.child())? {
+                match call {
                     Value::BuiltinFunction(function) => {
                         if args.len() != function.args {
                             return Err(RuntimeError::InvalidArgCount.span(expression.span));
@@ -71,13 +68,11 @@ impl<'table> Interpreter<'table> {
                         let mut function_env = env.child();
                         let mut result = Value::Null;
 
-                        for (name, value) in function.args.iter().zip(args.iter()) {
-                            function_env
-                                .set(name, value.clone())
-                                .map_err(|e| e.span(expression.span))?;
+                        for (name, value) in function.args.iter().zip(args.into_iter()) {
+                            function_env.set(name, value).map_err(|e| e.span(expression.span))?;
                         }
 
-                        for expression in function.body.iter() {
+                        for expression in function.body.into_iter() {
                             result = Self::interpret_expression(expression, &mut function_env)?;
                         }
 
@@ -87,48 +82,48 @@ impl<'table> Interpreter<'table> {
                 }
             }
             Expression::If { cond, t_branch, f_branch } => {
-                if Self::interpret_expression(cond, &mut env.child())?.is_truthy() {
-                    Self::interpret_expression(t_branch, &mut env.child())
+                if Self::interpret_expression(*cond, env)?.is_truthy() {
+                    Self::interpret_expression(*t_branch, env)
                 } else {
-                    Self::interpret_expression(f_branch, &mut env.child())
+                    Self::interpret_expression(*f_branch, env)
                 }
             }
             Expression::Function { args, body } => {
-                Ok(Value::UserFunction(UserFunction { args: args.clone(), body: body.clone() }))
+                Ok(Value::UserFunction(UserFunction { args, body }))
             }
             Expression::Define { name, value } => {
-                env.set(name, Self::interpret_expression(value, &mut env.child())?)
-                    .map_err(|e| e.span(expression.span))?;
+                let value = Self::interpret_expression(*value, env)?;
+                env.set(name, value).map_err(|e| e.span(expression.span))?;
                 Ok(Value::Null)
             }
         }
     }
 }
 
-pub struct Environment<'parent> {
-    parent: Option<&'parent Environment<'parent>>,
-    binds: std::collections::HashMap<SymbolId, Value>,
+pub struct Environment<'e, 's> {
+    parent: Option<&'e Environment<'e, 's>>,
+    binds: std::collections::HashMap<&'s str, Value<'s>>,
 }
 
-impl<'parent> Environment<'parent> {
+impl<'e, 's> Environment<'e, 's> {
     pub fn new() -> Self {
         Self { parent: None, binds: std::collections::HashMap::new() }
     }
 
-    pub fn child(&'parent self) -> Self {
+    pub fn child(&'e self) -> Self {
         Self { parent: Some(self), binds: std::collections::HashMap::new() }
     }
 
-    pub fn set(&mut self, name: &SymbolId, value: Value) -> Result<(), RuntimeError> {
+    pub fn set(&mut self, name: &'s str, value: Value<'s>) -> Result<(), RuntimeError> {
         if self.binds.contains_key(&name) {
             Err(RuntimeError::VariableAlreadyDefined)
         } else {
-            self.binds.insert(*name, value);
+            self.binds.insert(name, value);
             Ok(())
         }
     }
 
-    pub fn get(&self, name: &SymbolId) -> Result<&Value, RuntimeError> {
+    pub fn get(&self, name: &'s str) -> Result<&Value<'s>, RuntimeError> {
         if let Some(v) = self.binds.get(&name) {
             Ok(v)
         } else if let Some(parent) = &self.parent {
@@ -145,72 +140,52 @@ mod tests {
         super::*,
         crate::{
             lexing::lexer::Lexer,
-            lowering::lowerer::Lowerer,
-            parsing::parser::Parser,
+            lowering::lowerer::lower,
+            parsing::parser::parse,
             runtime::{builtins::make_builtins, error::SRuntimeError, value::Value},
         },
     };
 
     fn interpret_str(source: &str) -> Result<Value, SRuntimeError> {
-        let mut symbol_table = SymbolTable::new();
         let mut lexer = Lexer::new(source);
+        let syntax_list = parse(&mut lexer)?;
+        let expression_list = lower(&syntax_list)?;
 
-        let mut parser = Parser::new(&mut symbol_table);
-        let syntax_list = parser.parse(&mut lexer)?;
-
-        let mut lowerer = Lowerer::new(&mut symbol_table);
-        let expression_list = lowerer.lower(&syntax_list)?;
-
-        let mut interpreter = Interpreter::new(&mut symbol_table, &make_builtins())?;
-        let result = interpreter.interpret(&expression_list)?;
+        let mut interpreter = Interpreter::new(&make_builtins())?;
+        let result = interpreter.interpret(expression_list)?;
 
         Ok(result)
     }
 
     #[test]
     fn test_interpret_literal() {
-        assert_eq!(
-            interpret_str("1").unwrap(),
-            Value::Integer(1),
-        )
+        assert_eq!(interpret_str("1").unwrap(), Value::Integer(1),)
     }
 
     #[test]
     fn test_interpret_call_builtin() {
-        assert_eq!(
-            interpret_str("(+ 1 2)").unwrap(),
-            Value::Integer(3),
-        )
+        assert_eq!(interpret_str("(+ 1 2)").unwrap(), Value::Integer(3),)
     }
 
     #[test]
     fn test_interpret_call_user() {
-        assert_eq!(
-            interpret_str("((fn (a b) (+ a b)) 1 2)").unwrap(),
-            Value::Integer(3),
-        )
+        assert_eq!(interpret_str("((fn (a b) (+ a b)) 1 2)").unwrap(), Value::Integer(3),)
     }
 
     #[test]
     fn test_interpret_if_a() {
-        assert_eq!(
-            interpret_str("(if true 4 2)").unwrap(),
-            Value::Integer(4),
-        )
+        assert_eq!(interpret_str("(if true 4 2)").unwrap(), Value::Integer(4),)
     }
 
     #[test]
     fn test_interpret_if_b() {
-        assert_eq!(
-            interpret_str("(if false 4 2)").unwrap(),
-            Value::Integer(2),
-        )
+        assert_eq!(interpret_str("(if false 4 2)").unwrap(), Value::Integer(2),)
     }
-    
+
     #[test]
     fn test_interpret_define() {
         assert_eq!(
-            interpret_str("(define add (fn (a b) (+ a b))) (add 1 2)").unwrap(),
+            interpret_str("(def add (fn (a b) (+ a b))) (add 1 2)").unwrap(),
             Value::Integer(3),
         )
     }

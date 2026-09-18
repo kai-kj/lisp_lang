@@ -3,7 +3,7 @@ use crate::{
     span::{Spanned, SpannedExt},
 };
 
-impl<'source> SToken<'source> {
+impl<'s> SToken<'s> {
     pub fn to_owned_token(&self) -> SOwnedToken {
         match self.value {
             Token::End => OwnedToken::End,

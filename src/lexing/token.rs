@@ -1,15 +1,15 @@
 use crate::span::Spanned;
 
-pub type SToken<'source> = Spanned<Token<'source>>;
+pub type SToken<'s> = Spanned<Token<'s>>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Token<'source> {
+pub enum Token<'s> {
     End,
     ParenLeft,
     ParenRight,
     Quote,
-    Symbol(&'source str),
+    Symbol(&'s str),
     Integer(i64),
     Float(f64),
-    String(&'source str),
+    String(&'s str),
 }

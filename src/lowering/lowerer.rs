@@ -6,109 +6,87 @@ use crate::{
     },
     runtime::value::Value,
     span::{Span, Spanned, SpannedExt},
-    symbol::SymbolTable,
 };
 
-pub struct Lowerer<'table> {
-    symbol_table: &'table mut SymbolTable,
+pub fn lower<'s>(syntax: &Vec<SSyntax<'s>>) -> Result<Vec<SExpression<'s>>, SLowererError> {
+    syntax.into_iter().map(|syntax| lower_expression(&syntax)).collect()
 }
 
-impl<'table> Lowerer<'table> {
-    pub fn new(symbol_table: &'table mut SymbolTable) -> Self {
-        Self { symbol_table }
+fn lower_expression<'s>(s: &SSyntax<'s>) -> Result<SExpression<'s>, SLowererError> {
+    match &s.value {
+        Syntax::Symbol(v) => match *v {
+            "null" => Ok(Expression::Literal(Value::Null).span(s.span)),
+            "true" => Ok(Expression::Literal(Value::Boolean(true)).span(s.span)),
+            "false" => Ok(Expression::Literal(Value::Boolean(false)).span(s.span)),
+            "if" | "fn" | "def" | "quote" => Err(LowererError::UnexpectedExpression.span(s.span)),
+            _ => Ok(Expression::Variable(*v).span(s.span)),
+        },
+        Syntax::Integer(v) => Ok(Expression::Literal(Value::Integer(*v)).span(s.span)),
+        Syntax::Float(v) => Ok(Expression::Literal(Value::Float(*v)).span(s.span)),
+        Syntax::String(v) => Ok(Expression::Literal(Value::String(v.clone())).span(s.span)),
+        Syntax::List(v) => lower_list(&v, s.span),
+        _ => Err(LowererError::UnexpectedExpression.span(s.span)),
     }
+}
 
-    pub fn lower(&mut self, syntax: &Vec<SSyntax>) -> Result<Vec<SExpression>, SLowererError> {
-        syntax
-            .into_iter()
-            .map(|syntax| Self::lower_expression(&mut self.symbol_table, &syntax))
-            .collect()
-    }
+fn lower_list<'s>(
+    items: &[SSyntax<'s>],
+    parent_span: Option<Span>,
+) -> Result<SExpression<'s>, SLowererError> {
+    let [head, rest @ ..] = items else {
+        return Ok(Expression::Literal(Value::Null).span(parent_span));
+    };
 
-    pub fn lower_expression(
-        symbol_table: &mut SymbolTable,
-        s: &SSyntax,
-    ) -> Result<SExpression, SLowererError> {
-        match &s.value {
-            Syntax::Null => Ok(Expression::Literal(Value::Null).span(s.span)),
-            Syntax::Symbol(v) => Ok(Expression::Variable(*v).span(s.span)),
-            Syntax::Boolean(v) => Ok(Expression::Literal(Value::Boolean(*v)).span(s.span)),
-            Syntax::Integer(v) => Ok(Expression::Literal(Value::Integer(*v)).span(s.span)),
-            Syntax::Float(v) => Ok(Expression::Literal(Value::Float(*v)).span(s.span)),
-            Syntax::String(v) => Ok(Expression::Literal(Value::String(v.clone())).span(s.span)),
-            Syntax::List(v) => Self::lower_list(symbol_table, &v, s.span),
-            _ => Err(LowererError::UnexpectedExpression.span(s.span)),
+    match head.value {
+        Syntax::Symbol("if") => {
+            let [condition, then_branch, else_branch] = rest else {
+                return Err(LowererError::InvalidIf.span(parent_span));
+            };
+            Ok(Expression::If {
+                cond: Box::new(lower_expression(condition)?),
+                t_branch: Box::new(lower_expression(then_branch)?),
+                f_branch: Box::new(lower_expression(else_branch)?),
+            }
+            .span(parent_span))
         }
-    }
-
-    fn lower_list(
-        symbol_table: &mut SymbolTable,
-        items: &[SSyntax],
-        parent_span: Option<Span>,
-    ) -> Result<SExpression, SLowererError> {
-        let [head, rest @ ..] = items else {
-            return Ok(Expression::Literal(Value::Null).span(parent_span));
-        };
-
-        match head.value {
-            Syntax::If => {
-                let [condition, then_branch, else_branch] = rest else {
-                    return Err(LowererError::InvalidIf.span(parent_span));
-                };
-                Ok(Expression::If {
-                    cond: Box::new(Self::lower_expression(symbol_table, condition)?),
-                    t_branch: Box::new(Self::lower_expression(symbol_table, then_branch)?),
-                    f_branch: Box::new(Self::lower_expression(symbol_table, else_branch)?),
-                }
-                    .span(parent_span))
+        Syntax::Symbol("fn") => {
+            let [args, body @ ..] = rest else {
+                return Err(LowererError::InvalidFunction.span(parent_span));
+            };
+            let Syntax::List(args) = &args.value else {
+                return Err(LowererError::InvalidFunctionArgs.span(args.span));
+            };
+            let args = args
+                .iter()
+                .map(|arg| match arg.value {
+                    Syntax::Symbol(symbol) => Ok(symbol),
+                    _ => Err(LowererError::InvalidFunctionArg.span(arg.span)),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if body.is_empty() {
+                return Err(LowererError::InvalidFunctionBody.span(parent_span));
             }
-            Syntax::Function => {
-                let [args, body @ ..] = rest else {
-                    return Err(LowererError::InvalidFunction.span(parent_span));
-                };
-                let Syntax::List(args) = &args.value else {
-                    return Err(LowererError::InvalidFunctionArgs.span(args.span));
-                };
-                let args = args
-                    .iter()
-                    .map(|arg| match arg.value {
-                        Syntax::Symbol(symbol) => Ok(symbol),
-                        _ => Err(LowererError::InvalidFunctionArg.span(arg.span)),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                if body.is_empty() {
-                    return Err(LowererError::InvalidFunctionBody.span(parent_span));
-                }
-                let body = body
-                    .iter()
-                    .map(|expr| Self::lower_expression(symbol_table, expr))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Expression::Function { args, body }.span(parent_span))
-            }
-            Syntax::Define => {
-                let [name, value] = rest else {
-                    return Err(LowererError::InvalidDefine.span(parent_span));
-                };
-                let Syntax::Symbol(name) = name.value else {
-                    return Err(LowererError::InvalidDefineName.span(name.span));
-                };
-                Ok(Expression::Define {
-                    name,
-                    value: Box::new(Self::lower_expression(symbol_table, value)?),
-                }.span(parent_span))
-            }
-            Syntax::Quote => panic!("quote is not supported yet"),
-            Syntax::Symbol(_) | Syntax::List(_) => {
-                Ok(Expression::Call {
-                    call: Box::new(Self::lower_expression(symbol_table, head)?),
-                    args: rest
-                        .iter()
-                        .map(|expr| Self::lower_expression(symbol_table, expr))
-                        .collect::<Result<Vec<_>, _>>()?,
-                }.span(parent_span))
-            }
-            _ => Err(LowererError::InvalidCall.span(head.span)),
+            let body =
+                body.iter().map(|expr| lower_expression(expr)).collect::<Result<Vec<_>, _>>()?;
+            Ok(Expression::Function { args, body }.span(parent_span))
         }
+        Syntax::Symbol("def") => {
+            let [name, value] = rest else {
+                return Err(LowererError::InvalidDefine.span(parent_span));
+            };
+            let Syntax::Symbol(name) = name.value else {
+                return Err(LowererError::InvalidDefineName.span(name.span));
+            };
+            Ok(Expression::Define { name, value: Box::new(lower_expression(value)?) }
+                .span(parent_span))
+        }
+        Syntax::Symbol("quote") => panic!("quote is not supported yet"),
+        Syntax::Symbol(_) | Syntax::List(_) => Ok(Expression::Call {
+            call: Box::new(lower_expression(head)?),
+            args: rest.iter().map(|expr| lower_expression(expr)).collect::<Result<Vec<_>, _>>()?,
+        }
+        .span(parent_span)),
+        _ => Err(LowererError::InvalidCall.span(head.span)),
     }
 }
 
@@ -141,96 +119,72 @@ mod tests {
         crate::{
             display::WithDisplayContextExt,
             lexing::lexer::Lexer,
-            parsing::parser::{Parser, ParserError},
+            parsing::parser::{ParserError, parse},
             runtime::value::Value,
             span::SpannedExt,
-            symbol::SymbolTable,
         },
     };
 
     macro_rules! expression_list {
         ($($kind:ident $args:tt),* $(,)?) => {{
-            let mut _symbol_table = SymbolTable::new();
-            Ok(expression_list!(_symbol_table; $($kind $args),*))
+            Ok(vec![$(expression_list!(@expr $kind $args)),*])
         }};
 
-        ($table:ident; $($kind:ident $args:tt),* $(,)?) => {{
-            let _symbol_table = &mut $table;
-            vec![$(expression_list!(@expr _symbol_table; $kind $args)),*]
-        }};
+        (@expr Literal(Null)) => { Expression::Literal(Value::Null).span_none() };
 
-        (@expr $table:ident; Literal(Null)) => { Expression::Literal(Value::Null).span_none() };
-
-        (@expr $table:ident; Literal(Symbol($value:expr))) => {
-            Expression::Literal(Value::Symbol($table.add_symbol($value))).span_none()
-        };
-
-        (@expr $table:ident; Literal($kind:ident($value:expr))) => {
+        (@expr Literal($kind:ident($value:expr))) => {
             Expression::Literal(Value::$kind($value).into()).span_none()
         };
 
-        (@expr $table:ident; Variable($name:expr)) => {
-            Expression::Variable($table.add_symbol($name)).span_none()
-        };
+        (@expr Variable($name:expr)) => { Expression::Variable($name).span_none() };
 
-        (@expr $table:ident; Call($call_kind:ident $call_args:tt $(, $kind:ident $args:tt)* $(,)?)) => {
+        (@expr Call($call_kind:ident $call_args:tt $(, $kind:ident $args:tt)* $(,)?)) => {
             Expression::Call {
-                call: Box::new(expression_list!(@expr $table; $call_kind $call_args)),
-                args: vec![$(expression_list!(@expr $table; $kind $args)),*],
+                call: Box::new(expression_list!(@expr $call_kind $call_args)),
+                args: vec![$(expression_list!(@expr $kind $args)),*],
             }.span_none()
         };
 
-        (@expr $table:ident; If(
+        (@expr If(
             $cond_kind:ident $cond_args:tt,
             $t_kind:ident $t_args:tt,
             $f_kind:ident $f_args:tt
         )) => {
             Expression::If {
-                cond: Box::new(expression_list!(@expr $table; $cond_kind $cond_args)),
-                t_branch: Box::new(expression_list!(@expr $table; $t_kind $t_args)),
-                f_branch: Box::new(expression_list!(@expr $table; $f_kind $f_args)),
+                cond: Box::new(expression_list!(@expr $cond_kind $cond_args)),
+                t_branch: Box::new(expression_list!(@expr $t_kind $t_args)),
+                f_branch: Box::new(expression_list!(@expr $f_kind $f_args)),
             }.span_none()
         };
 
-        (@expr $table:ident; Function(
+        (@expr Function(
             ($($arg:expr),* $(,)?),
             $($kind:ident $args:tt),* $(,)?
         )) => {
             Expression::Function {
-                args: vec![
-                    $($table.add_symbol($arg)),*
-                ],
-                body: vec![
-                    $(expression_list!(@expr $table; $kind $args)),*
-                ],
+                args: vec![ $($arg),* ],
+                body: vec![ $(expression_list!(@expr $kind $args)),* ],
             }.span_none()
         };
 
-        (@expr $table:ident; Define(
+        (@expr Define(
             $name:expr,
             $kind:ident $args:tt
         )) => {
             Expression::Define {
-                name: $table.add_symbol($name),
-                value: Box::new(
-                    expression_list!(@expr $table; $kind $args)
-                ),
+                name: $name,
+                value: Box::new(expression_list!(@expr $kind $args)),
             }.span_none()
         };
     }
 
     fn lower_str(source: &str) -> Result<Vec<SExpression>, SLowererError> {
-        let mut symbol_table = SymbolTable::new();
         let mut lexer = Lexer::new(source);
-
-        let mut parser = Parser::new(&mut symbol_table);
-        let syntax_list = parser.parse(&mut lexer)?;
-
-        let mut lowerer = Lowerer::new(&mut symbol_table);
-        let expression_list = lowerer.lower(&syntax_list)?;
+        let syntax_list = parse(&mut lexer)?;
+        let expression_list = lower(&syntax_list)?;
 
         for expression in &expression_list {
-            println!("{}", expression.with_symbols(&symbol_table).set_indent(2));
+            println!("{}", expression.disp().set_indent(2));
         }
 
         Ok(expression_list)
@@ -281,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_lower_define() {
-        assert_eq!(lower_str("(define x 42)"), expression_list!(Define("x", Literal(Integer(42)))))
+        assert_eq!(lower_str("(def x 42)"), expression_list!(Define("x", Literal(Integer(42)))))
     }
 
     #[test]
@@ -338,14 +292,14 @@ mod tests {
 
     #[test]
     fn test_lower_invalid_define() {
-        assert_eq!(lower_str("(define a)"), Err(LowererError::InvalidDefine.span_between(0, 10)));
+        assert_eq!(lower_str("(def a)"), Err(LowererError::InvalidDefine.span_between(0, 7)));
     }
 
     #[test]
     fn test_lower_invalid_define_name() {
         assert_eq!(
-            lower_str(r#"(define "a" 42)"#),
-            Err(LowererError::InvalidDefineName.span_between(8, 11))
+            lower_str(r#"(def "a" 42)"#),
+            Err(LowererError::InvalidDefineName.span_between(5, 8))
         );
     }
 

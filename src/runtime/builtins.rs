@@ -14,7 +14,7 @@ macro_rules! get_args {
     };
 }
 
-pub fn make_builtins() -> Vec<(&'static str, BuiltinFunction)> {
+pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFunction<'s>)> {
     vec![
         (
             "+",

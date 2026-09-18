@@ -1,17 +1,17 @@
-use crate::{lowering::expression::SExpression, runtime::error::RuntimeError, symbol::SymbolId};
+use crate::{lowering::expression::SExpression, runtime::error::RuntimeError};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value {
+pub enum Value<'s> {
     Null,
     Boolean(bool),
     Integer(i64),
     Float(f64),
     String(String),
-    BuiltinFunction(BuiltinFunction),
-    UserFunction(UserFunction),
+    BuiltinFunction(BuiltinFunction<'s>),
+    UserFunction(UserFunction<'s>),
 }
 
-impl Value {
+impl<'s> Value<'s> {
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Null => false,
@@ -25,7 +25,7 @@ impl Value {
     }
 }
 
-impl std::fmt::Display for Value {
+impl<'s> std::fmt::Display for Value<'s> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Null => write!(f, "Null"),
@@ -40,19 +40,19 @@ impl std::fmt::Display for Value {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct BuiltinFunction {
+pub struct BuiltinFunction<'s> {
     pub args: usize,
-    pub body: fn(&[Value]) -> Result<Value, RuntimeError>,
+    pub body: fn(&[Value<'s>]) -> Result<Value<'s>, RuntimeError>,
 }
 
-impl PartialEq for BuiltinFunction {
+impl<'s> PartialEq for BuiltinFunction<'s> {
     fn eq(&self, _other: &Self) -> bool {
         false
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct UserFunction {
-    pub args: Vec<SymbolId>,
-    pub body: Vec<SExpression>,
+pub struct UserFunction<'s> {
+    pub args: Vec<&'s str>,
+    pub body: Vec<SExpression<'s>>,
 }
