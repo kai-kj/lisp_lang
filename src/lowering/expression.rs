@@ -1,92 +1,111 @@
-use crate::{
-    display::{WithDisplayContext, WithDisplayContextExt},
-    runtime::value::Value,
-    span::Spanned,
-};
+use crate::{span::Spanned, util::if_not_last};
 
 pub type SExpression<'s> = Spanned<Expression<'s>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expression<'s> {
-    Literal(Value<'s>),
-    Variable(&'s str),
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    Float(f64),
+    String(&'s str),
+    Symbol(&'s str),
     Call {
-        call: Box<SExpression<'s>>,
-        args: Vec<SExpression<'s>>,
+        call: ExpressionID,
+        args: Vec<ExpressionID>,
     },
     If {
-        cond: Box<SExpression<'s>>,
-        t_branch: Box<SExpression<'s>>,
-        f_branch: Box<SExpression<'s>>,
+        cond: ExpressionID,
+        t_branch: ExpressionID,
+        f_branch: ExpressionID,
     },
     Function {
         args: Vec<&'s str>,
-        body: Vec<SExpression<'s>>,
+        body: Vec<ExpressionID>,
     },
     Define {
         name: &'s str,
-        value: Box<SExpression<'s>>,
+        value: ExpressionID,
     },
 }
 
-impl<'v, 's> std::fmt::Display for WithDisplayContext<'v, SExpression<'s>> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.make_indent())?;
-        match (&self.value.value, self.indent_size) {
-            (Expression::Literal(v), _) => write!(f, "Literal({})", v),
-            (Expression::Variable(v), _) => write!(f, "Variable(\"{}\")", v),
-            (Expression::Call { call, args }, None) => {
-                let args = args.iter().map(|c| format!("{}", c.disp())).collect::<Vec<_>>();
-                write!(f, "Call({}, {})", call.as_ref().disp(), args.join(", "))
+pub struct ExpressionTree<'s> {
+    roots: Vec<ExpressionID>,
+    expressions: Vec<SExpression<'s>>,
+}
+
+impl<'s> ExpressionTree<'s> {
+    pub fn new() -> Self {
+        Self { roots: Vec::new(), expressions: Vec::new() }
+    }
+
+    pub fn get(&self, id: ExpressionID) -> &SExpression<'s> {
+        &self.expressions[id.0]
+    }
+
+    fn format_expression(
+        &self,
+        expression: ExpressionID,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        match &self.get(expression).value {
+            Expression::Null => write!(f, "Null"),
+            Expression::Boolean(v) => write!(f, "Boolean({})", v),
+            Expression::Integer(v) => write!(f, "Integer({})", v),
+            Expression::Float(v) => write!(f, "Float({})", v),
+            Expression::String(v) => write!(f, "String({})", v),
+            Expression::Symbol(v) => write!(f, "Symbol({})", v),
+            Expression::Call { call, args } => {
+                write!(f, "Call(")?;
+                self.format_expression(*call, f)?;
+                write!(f, ", ")?;
+                for (i, arg) in args.iter().enumerate() {
+                    self.format_expression(*arg, f)?;
+                    if_not_last!(args, i, write!(f, ", ")?);
+                }
+                write!(f, ")")
             }
-            (Expression::Call { call, args }, Some(indent_size)) => {
-                writeln!(f, "Call(")?;
-                writeln!(f, "{},", call.as_ref().disp().indent())?;
-                args.iter().try_for_each(|c| writeln!(f, "{},", c.disp().indent()))?;
-                write!(f, "{})", " ".repeat(self.indent_level * indent_size))
+            Expression::If { cond, t_branch, f_branch } => {
+                write!(f, "If(")?;
+                self.format_expression(*cond, f)?;
+                write!(f, ", ")?;
+                self.format_expression(*t_branch, f)?;
+                write!(f, ", ")?;
+                self.format_expression(*f_branch, f)?;
+                write!(f, ")")
             }
-            (Expression::If { cond, t_branch, f_branch }, None) => {
-                write!(
-                    f,
-                    "If({}, {}, {})",
-                    cond.as_ref().disp(),
-                    t_branch.as_ref().disp(),
-                    f_branch.as_ref().disp()
-                )
+            Expression::Function { args, body } => {
+                write!(f, "Function(")?;
+                for (i, arg) in args.iter().enumerate() {
+                    write!(f, "{}", arg)?;
+                    if_not_last!(args, i, write!(f, ", ")?);
+                }
+                write!(f, ", ")?;
+                for (i, expr) in body.iter().enumerate() {
+                    self.format_expression(*expr, f)?;
+                    if_not_last!(body, i, write!(f, ", ")?);
+                }
+                write!(f, ")")
             }
-            (Expression::If { cond, t_branch, f_branch }, Some(indent_size)) => {
-                writeln!(f, "If(")?;
-                writeln!(f, "{},", cond.as_ref().disp().indent())?;
-                writeln!(f, "{},", t_branch.as_ref().disp().indent())?;
-                writeln!(f, "{},", f_branch.as_ref().disp().indent())?;
-                write!(f, "{})", " ".repeat(self.indent_level * indent_size))
-            }
-            (Expression::Function { args, body }, None) => {
-                let args = args.iter().map(|c| format!("{}", c)).collect::<Vec<_>>();
-                let body = body.iter().map(|c| format!("{}", c.disp())).collect::<Vec<_>>();
-                write!(f, "Function({}, {})", args.join(", "), body.join(", "))
-            }
-            (Expression::Function { args, body }, Some(indent_size)) => {
-                let args = args.iter().map(|c| format!("{}", c)).collect::<Vec<_>>();
-                writeln!(f, "Function(")?;
-                writeln!(
-                    f,
-                    "{}({}),",
-                    " ".repeat((self.indent_level + 1) * indent_size),
-                    args.join(", ")
-                )?;
-                body.iter().try_for_each(|c| writeln!(f, "{},", c.disp().indent()))?;
-                write!(f, "{})", " ".repeat(self.indent_level * indent_size))
-            }
-            (Expression::Define { name, value }, None) => {
-                write!(f, "Define({}, {})", name, value.as_ref().disp())
-            }
-            (Expression::Define { name, value }, Some(indent_size)) => {
-                writeln!(f, "Define(")?;
-                writeln!(f, "{},", name)?;
-                writeln!(f, "{}", value.as_ref().disp().indent())?;
-                write!(f, "{})", " ".repeat(self.indent_level * indent_size))
+            Expression::Define { name, value } => {
+                write!(f, "Define(")?;
+                write!(f, "{}", name)?;
+                write!(f, ", ")?;
+                self.format_expression(*value, f)?;
+                write!(f, ")")
             }
         }
     }
 }
+
+impl<'s> std::fmt::Display for ExpressionTree<'s> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for root in self.roots.iter() {
+            self.format_expression(*root, f)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct ExpressionID(usize);

@@ -11,13 +11,13 @@ pub struct Lexer<'s> {
 
 macro_rules! make_token {
     ($start:expr, $end:expr, $kind:ident $(($value:expr))? ) => {
-        Ok(Token::$kind $(($value))?.span_between($start, $end))
+        Ok(Token::$kind $(($value))?.sbetween($start, $end))
     };
 }
 
 impl<'s> Lexer<'s> {
     pub fn new(source: &'s str) -> Self {
-        let mut lexer = Self { source, pos: 0, next: Ok(Token::End.span_none()) };
+        let mut lexer = Self { source, pos: 0, next: Ok(Token::End.sbetween(0, 1)) };
         lexer.next = lexer.scan();
         lexer
     }
@@ -64,7 +64,7 @@ impl<'s> Lexer<'s> {
                         _ => self.advance(),
                     }
                 }
-                Err(LexerError::UnterminatedString.span_between(start_pos, self.pos))
+                Err(LexerError::UnterminatedString.sbetween(start_pos, self.pos))
             }
             Some(_) => {
                 self.advance_while(|_, c| {
@@ -91,7 +91,7 @@ impl<'s> Lexer<'s> {
 
                 make_token!(start_pos, self.pos, Symbol(characters))
             }
-            None => Ok(Token::End.span(self.next?.span)),
+            None => Ok(Token::End.sinherit(&self.next?)),
         }
     }
 
@@ -128,106 +128,100 @@ pub enum LexerError {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::*,
-        crate::lexing::owned_token::{OwnedToken, SOwnedToken},
-    };
+    use super::*;
 
-    macro_rules! token_list {
-        ($($kind:ident $(($value:expr))?),* $(,)?) => { Ok(vec![$(token_list!(@token $kind $(($value))?)),*]) };
-        (@token String($value:expr)) => { OwnedToken::String(($value).into()).span_none() };
-        (@token Symbol($value:expr)) => { OwnedToken::Symbol(($value).into()).span_none() };
-        (@token $kind:ident $(($value:expr))?) => { OwnedToken::$kind $(($value))?.span_none() };
-    }
-
-    fn lex_str_to_owned_vec(source: &str) -> Result<Vec<SOwnedToken>, SLexerError> {
+    fn lex_str_to_vec(source: &str) -> Result<Vec<SToken>, SLexerError> {
         let mut lexer = Lexer::new(&source);
         let mut tokens = vec![];
         loop {
             match lexer.next() {
-                Ok(token) if token.value == Token::End => {
-                    break;
-                }
-                Ok(token) => {
-                    tokens.push(token.to_owned_token());
-                }
-                Err(err) => {
-                    return Err(err);
-                }
+                Ok(token) if token.value == Token::End => break,
+                Ok(token) => tokens.push(token),
+                Err(err) => return Err(err),
             }
         }
         Ok(tokens)
     }
 
+    fn format_vec_to_string(tokens: &[SToken]) -> String {
+        tokens
+            .iter()
+            .map(|token| format!("{:?}", token.value))
+            .collect::<Vec<String>>()
+            .join(", ")
+            .trim()
+            .to_string()
+    }
+
     #[test]
     fn test_parens() {
         assert_eq!(
-            lex_str_to_owned_vec(r#"('())"#),
-            token_list!(ParenLeft, Quote, ParenLeft, ParenRight, ParenRight),
+            format_vec_to_string(&lex_str_to_vec(r#"('())"#).unwrap()),
+            r#"ParenLeft, Quote, ParenLeft, ParenRight, ParenRight"#,
         );
     }
 
     #[test]
     fn test_symbol() {
         assert_eq!(
-            lex_str_to_owned_vec(r#"+ - foo bar"#),
-            token_list!(Symbol(r#"+"#), Symbol(r#"-"#), Symbol(r#"foo"#), Symbol(r#"bar"#))
+            format_vec_to_string(&lex_str_to_vec(r#"+ - foo bar"#).unwrap()),
+            r#"Symbol("+"), Symbol("-"), Symbol("foo"), Symbol("bar")"#
         );
     }
 
     #[test]
     fn test_int() {
         assert_eq!(
-            lex_str_to_owned_vec(r#"-42 42 +42"#),
-            token_list!(Integer(-42), Integer(42), Integer(42))
+            format_vec_to_string(&lex_str_to_vec(r#"-42 42 +42"#).unwrap()),
+            r#"Integer(-42), Integer(42), Integer(42)"#
         );
     }
 
     #[test]
     fn test_int_zero() {
         assert_eq!(
-            lex_str_to_owned_vec(r#"-0 0 +0"#),
-            token_list!(Integer(0), Integer(0), Integer(0))
+            format_vec_to_string(&lex_str_to_vec(r#"-0 0 +0"#).unwrap()),
+            r#"Integer(0), Integer(0), Integer(0)"#
         );
     }
 
     #[test]
     fn test_float() {
         assert_eq!(
-            lex_str_to_owned_vec(r#"-42.0 42.0 +42.0"#),
-            token_list!(Float(-42.0), Float(42.0), Float(42.0))
+            format_vec_to_string(&lex_str_to_vec(r#"-42.0 42.0 +42.0"#).unwrap()),
+            r#"Float(-42.0), Float(42.0), Float(42.0)"#
         );
     }
 
     #[test]
     fn test_float_zero() {
         assert_eq!(
-            lex_str_to_owned_vec(r#"-0.0 0.0 +0.0"#),
-            token_list!(Float(0.0), Float(0.0), Float(0.0))
+            format_vec_to_string(&lex_str_to_vec(r#"-0.0 0.0 +0.0"#).unwrap()),
+            r#"Float(-0.0), Float(0.0), Float(0.0)"#
         );
     }
 
     #[test]
     fn test_string() {
         assert_eq!(
-            lex_str_to_owned_vec(r#""Hello, world!""#),
-            token_list!(String(r#"Hello, world!"#))
+            format_vec_to_string(&lex_str_to_vec(r#""Hello, world!""#).unwrap()),
+            r#"String("Hello, world!")"#
         );
     }
 
     #[test]
     fn test_string_escape() {
         assert_eq!(
-            lex_str_to_owned_vec(r#""Hello, \"world\"!""#),
-            token_list!(String(r#"Hello, \"world\"!"#))
+            format_vec_to_string(&lex_str_to_vec(r#""Hello, \"world\"!""#).unwrap()),
+            r#"String("Hello, \"world\"!")"#
         );
     }
 
     #[test]
     fn test_string_unterminated() {
         assert_eq!(
-            lex_str_to_owned_vec(r#""Hello, world!"#),
-            Err(LexerError::UnterminatedString.span_between(0, 14))
+            lex_str_to_vec(r#""Hello, world!"#),
+            Err(LexerError::UnterminatedString.sbetween(0, 14))
         );
     }
 }

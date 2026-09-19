@@ -3,92 +3,127 @@ use crate::{
         lexer::{Lexer, LexerError, SLexerError},
         token::Token,
     },
-    parsing::syntax::{SSyntax, Syntax},
+    parsing::syntax::{
+        StringStore, SymbolId, SymbolStore, Syntax, SyntaxId, SyntaxRange, SyntaxStore, SyntaxTree,
+    },
     span::{Spanned, SpannedExt},
 };
 
-pub fn parse<'s>(lexer: &mut Lexer<'s>) -> Result<Vec<SSyntax<'s>>, SParserError> {
-    let mut expressions = Vec::new();
-    loop {
-        match parse_expression(lexer) {
-            Ok(Some(expression)) => expressions.push(expression),
-            Ok(None) => return Ok(expressions),
-            Err(err) => return Err(err),
-        }
-    }
+pub struct Parser {
+    syntaxes: SyntaxStore,
+    symbols: SymbolStore,
+    strings: StringStore,
+    scratch: Vec<SyntaxId>,
+    quote: SymbolId,
 }
 
-fn parse_expression<'s>(lexer: &mut Lexer<'s>) -> Result<Option<SSyntax<'s>>, SParserError> {
-    let first_token = lexer.next()?;
-    let mut last_span = first_token.span;
+impl Parser {
+    pub fn new() -> Self {
+        let mut symbols = SymbolStore::new();
+        let quote = symbols.push("quote");
 
-    let kind = match first_token.value {
-        Token::End => return Ok(None),
-        Token::ParenLeft => {
-            let mut items = Vec::new();
-            loop {
-                match lexer.peek()? {
-                    next_token if next_token.value == Token::ParenRight => {
-                        lexer.next()?;
-                        last_span = next_token.span;
-                        break;
-                    }
-                    next_token if next_token.value == Token::End => {
-                        return Err(ParserError::MissingRightParen
-                            .span_join(first_token.span, next_token.span));
-                    }
-                    _ => {
-                        if let Some(expression) = parse_expression(lexer)? {
-                            items.push(expression);
+        Self {
+            syntaxes: SyntaxStore::new(),
+            symbols,
+            strings: StringStore::new(),
+            scratch: Vec::new(),
+            quote,
+        }
+    }
+
+    pub fn parse(mut self, lexer: &mut Lexer<'_>) -> Result<SyntaxTree, SParserError> {
+        while lexer.peek()?.value != Token::End {
+            let root = self.parse_expression(lexer)?;
+            self.scratch.push(root);
+        }
+
+        let roots = self.scratch_push(0);
+
+        Ok(SyntaxTree {
+            roots,
+            syntaxes: self.syntaxes,
+            symbols: self.symbols,
+            strings: self.strings,
+        })
+    }
+
+    fn parse_expression(&mut self, lexer: &mut Lexer<'_>) -> Result<SyntaxId, SParserError> {
+        let t_start = lexer.next()?;
+
+        let value = match t_start.value {
+            Token::End => {
+                return Err(ParserError::NothingToQuote.sinherit(&t_start));
+            }
+            Token::ParenRight => {
+                return Err(ParserError::UnexpectedRightParen.sinherit(&t_start));
+            }
+            Token::ParenLeft => {
+                let scratch_start = self.scratch.len();
+
+                loop {
+                    let t_next = lexer.peek()?;
+                    match t_next.value {
+                        Token::ParenRight => {
+                            lexer.next()?;
+                            let children = self.scratch_push(scratch_start);
+                            return Ok(self
+                                .syntaxes
+                                .push(Syntax::List(children).sjoin(&t_start, &t_next)));
+                        }
+                        Token::End => {
+                            return Err(ParserError::MissingRightParen.sjoin(&t_start, &t_next));
+                        }
+                        _ => {
+                            let child = self.parse_expression(lexer)?;
+                            self.scratch.push(child);
                         }
                     }
                 }
             }
-            Syntax::List(items)
-        }
-        Token::ParenRight => {
-            return Err(ParserError::UnexpectedRightParen.span(first_token.span));
-        }
-        Token::Quote => Syntax::List(vec![
-            Syntax::Symbol("quote").span(first_token.span),
-            parse_expression(lexer)?.ok_or(ParserError::NothingToQuote.span(first_token.span))?,
-        ]),
-        Token::Symbol(name) => Syntax::Symbol(name),
-        Token::Integer(value) => Syntax::Integer(value),
-        Token::Float(value) => Syntax::Float(value),
-        Token::String(value) => {
-            let mut string = String::with_capacity(value.len());
-            let mut chars = value.chars();
-            let mut off = 0;
-
-            while let Some(c) = chars.next() {
-                if c != '\\' {
-                    string.push(c);
-                    off += c.len_utf8();
-                    continue;
+            Token::Quote => {
+                if lexer.peek()?.value == Token::End {
+                    return Err(ParserError::NothingToQuote.sinherit(&t_start));
                 }
-                let escaped = match chars.next() {
-                    Some('n') => Ok('\n'),
-                    Some('r') => Ok('\r'),
-                    Some('t') => Ok('\t'),
-                    Some('0') => Ok('\0'),
-                    Some('\\') => Ok('\\'),
-                    Some('"') => Ok('"'),
-                    _ => {
-                        if let Some(span) = first_token.span {
-                            Err(ParserError::UnexpectedEscape
-                                .span_between(span.start + off + 1, span.start + off + 2))
-                        } else {
-                            Err(ParserError::UnexpectedEscape.span_none())
-                        }
-                    }
-                }?;
-                string.push(escaped);
+                let quoted = self.parse_expression(lexer)?;
+                let quotee = self.syntaxes.push(Syntax::Symbol(self.quote).sinherit(&t_start));
+                Syntax::List(self.syntaxes.push_children(&[quotee, quoted]))
             }
-            Syntax::String(string)
-        }
-    };
-    Ok(Some(kind.span_join(first_token.span, last_span)))
+            Token::Symbol(v) => Syntax::Symbol(self.symbols.push(v)),
+            Token::Integer(v) => Syntax::Integer(v),
+            Token::Float(v) => Syntax::Float(v),
+            Token::String(raw) => {
+                let mut res = String::with_capacity(raw.len());
+                let mut chars = raw.chars();
+
+                while let Some(c) = chars.next() {
+                    if c != '\\' {
+                        res.push(c);
+                        continue;
+                    }
+                    res.push(match chars.next() {
+                        Some('n') => '\n',
+                        Some('r') => '\r',
+                        Some('t') => '\t',
+                        Some('0') => '\0',
+                        Some('\\') => '\\',
+                        Some('"') => '"',
+                        _ => {
+                            return Err(ParserError::UnexpectedEscape.sinherit(&t_start));
+                        }
+                    });
+                }
+                Syntax::String(self.strings.push(res))
+            }
+        };
+
+        Ok(self.syntaxes.push(value.sinherit(&t_start)))
+    }
+
+    fn scratch_push(&mut self, mark: usize) -> SyntaxRange {
+        let range = self.syntaxes.push_children(&self.scratch[mark..]);
+        self.scratch.truncate(mark);
+        range
+    }
 }
 
 pub type SParserError = Spanned<ParserError>;
@@ -103,123 +138,105 @@ pub enum ParserError {
 }
 
 impl From<SLexerError> for SParserError {
-    fn from(value: SLexerError) -> Self {
-        SParserError { value: ParserError::LexerError(value.value), span: value.span }
+    fn from(error: SLexerError) -> Self {
+        ParserError::LexerError(error.value).sinherit(&error)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::display::WithDisplayContextExt};
+    use super::*;
 
-    macro_rules! syntax_list {
-        ($($kind:ident ($($args:tt)*)),* $(,)?) => {{
-            Ok(vec![$(syntax_list!(@kind $kind($($args)*))),*])
-        }};
-
-        (@kind List($($kind:ident ($($args:tt)*)),* $(,)?)) => {
-            Syntax::List(vec![$(syntax_list!(@kind $kind($($args)*))),*]).span_none()
-        };
-
-        (@kind $kind:ident($value:expr)) => {
-            Syntax::$kind($value.into()).span_none()
-        };
+    fn parse_str(source: &str) -> Result<SyntaxTree, SParserError> {
+        let mut lexer = Lexer::new(source);
+        Parser::new().parse(&mut lexer)
     }
 
-    fn parse_str(source: &str) -> Result<Vec<SSyntax>, SParserError> {
-        let mut lexer = Lexer::new(source);
-
-        let syntax_list = parse(&mut lexer)?;
-
-        for syntax in &syntax_list {
-            println!("{}", syntax.disp().set_indent(2));
-        }
-
-        Ok(syntax_list)
+    fn format_syntax_to_string(tokens: &SyntaxTree) -> String {
+        format!("{:?}", tokens).trim().to_string()
     }
 
     #[test]
     fn test_parse_list_nested() {
         assert_eq!(
-            parse_str(r#"(+ 1 (* 2 3))"#),
-            syntax_list!(List(Symbol("+"), Integer(1), List(Symbol("*"), Integer(2), Integer(3))))
+            format_syntax_to_string(&parse_str(r#"(+ 1 (* 2 3))"#).unwrap()),
+            r#"List(Symbol("+"), Integer(1), List(Symbol("*"), Integer(2), Integer(3)))"#
         )
     }
 
     #[test]
     fn test_parse_list_quote_a() {
         assert_eq!(
-            parse_str(r#"'(1 2)"#),
-            syntax_list!(List(Symbol("quote"), List(Integer(1), Integer(2))))
+            format_syntax_to_string(&parse_str(r#"'(1 2)"#).unwrap()),
+            r#"List(Symbol("quote"), List(Integer(1), Integer(2)))"#
         )
     }
 
     #[test]
     fn test_parse_symbol() {
-        assert_eq!(parse_str(r#"foo"#), syntax_list!(Symbol("foo")))
+        assert_eq!(format_syntax_to_string(&parse_str(r#"foo"#).unwrap()), r#"Symbol("foo")"#)
     }
 
     #[test]
     fn test_parse_string() {
-        assert_eq!(parse_str(r#""Hello, world!""#), syntax_list!(String("Hello, world!")))
+        assert_eq!(
+            format_syntax_to_string(&parse_str(r#""Hello, world!""#).unwrap()),
+            r#"String("Hello, world!")"#
+        )
     }
 
     #[test]
     fn test_parse_string_escaped_a() {
-        assert_eq!(parse_str(r#""Hello, \"world\"!""#), syntax_list!(String(r#"Hello, "world"!"#)))
+        assert_eq!(
+            format_syntax_to_string(&parse_str(r#""Hello, \"world\"!""#).unwrap()),
+            r#"String("Hello, "world"!")"#
+        )
     }
 
     #[test]
     fn test_parse_string_escaped_b() {
-        assert_eq!(parse_str(r#""Hello,\tworld!""#), syntax_list!(String(r#"Hello,	world!"#)))
+        assert_eq!(
+            format_syntax_to_string(&parse_str(r#""Hello,\tworld!""#).unwrap()),
+            r#"String("Hello,	world!")"#
+        )
     }
 
     #[test]
     fn test_parse_string_escaped_c() {
-        assert_eq!(parse_str(r#""Hello, \\world!""#), syntax_list!(String(r#"Hello, \world!"#)))
-    }
-
-    #[test]
-    fn test_list_span_a() {
-        assert_eq!(parse_str(r#"(    )"#), Ok(vec![Syntax::List(vec![]).span_between(0, 6)]),)
-    }
-
-    #[test]
-    fn test_list_span_b() {
-        assert_eq!(parse_str(r#"(    ) "#), Ok(vec![Syntax::List(vec![]).span_between(0, 6)]),)
+        assert_eq!(
+            format_syntax_to_string(&parse_str(r#""Hello, \\world!""#).unwrap()),
+            r#"String("Hello, \world!")"#
+        )
     }
 
     #[test]
     fn test_lexer_error() {
         assert_eq!(
             parse_str(r#""Hello, world!"#),
-            Err(LexerError::UnterminatedString.span_between(0, 14).into())
+            Err(LexerError::UnterminatedString.sbetween(0, 14).into())
         );
     }
 
     #[test]
     fn test_parse_missing_right_paren() {
-        assert_eq!(parse_str(r#"()(()"#), Err(ParserError::MissingRightParen.span_between(2, 5)))
+        assert_eq!(parse_str(r#"()(()"#), Err(ParserError::MissingRightParen.sbetween(2, 5)))
     }
 
     #[test]
     fn test_parse_unexpected_right_paren() {
-        assert_eq!(
-            parse_str(r#"()(()))"#),
-            Err(ParserError::UnexpectedRightParen.span_between(6, 7))
-        )
+        assert_eq!(parse_str(r#"()(()))"#), Err(ParserError::UnexpectedRightParen.sbetween(6, 7)))
     }
 
     #[test]
     fn test_parse_nothing_to_quote() {
-        assert_eq!(parse_str(r#"'()'"#), Err(ParserError::NothingToQuote.span_between(3, 4)))
+        assert_eq!(parse_str(r#"'()'"#), Err(ParserError::NothingToQuote.sbetween(3, 4)))
     }
 
     #[test]
     fn test_parse_unexpected_escape() {
         assert_eq!(
             parse_str(r#""Hello, \x world!""#),
-            Err(ParserError::UnexpectedEscape.span_between(8, 9))
+            Err(ParserError::UnexpectedEscape.sbetween(0, 18))
         )
     }
 }

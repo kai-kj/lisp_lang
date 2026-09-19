@@ -19,7 +19,7 @@ fn lower_expression<'s>(s: &SSyntax<'s>) -> Result<SExpression<'s>, SLowererErro
             "true" => Ok(Expression::Literal(Value::Boolean(true)).span(s.span)),
             "false" => Ok(Expression::Literal(Value::Boolean(false)).span(s.span)),
             "if" | "fn" | "def" | "quote" => Err(LowererError::UnexpectedExpression.span(s.span)),
-            _ => Ok(Expression::Variable(*v).span(s.span)),
+            _ => Ok(Expression::Symbol(*v).span(s.span)),
         },
         Syntax::Integer(v) => Ok(Expression::Literal(Value::Integer(*v)).span(s.span)),
         Syntax::Float(v) => Ok(Expression::Literal(Value::Float(*v)).span(s.span)),
@@ -117,7 +117,6 @@ mod tests {
     use {
         super::*,
         crate::{
-            display::WithDisplayContextExt,
             lexing::lexer::Lexer,
             parsing::parser::{ParserError, parse},
             runtime::value::Value,
@@ -136,7 +135,7 @@ mod tests {
             Expression::Literal(Value::$kind($value).into()).span_none()
         };
 
-        (@expr Variable($name:expr)) => { Expression::Variable($name).span_none() };
+        (@expr Variable($name:expr)) => { Expression::Symbol($name).span_none() };
 
         (@expr Call($call_kind:ident $call_args:tt $(, $kind:ident $args:tt)* $(,)?)) => {
             Expression::Call {
@@ -181,13 +180,7 @@ mod tests {
     fn lower_str(source: &str) -> Result<Vec<SExpression>, SLowererError> {
         let mut lexer = Lexer::new(source);
         let syntax_list = parse(&mut lexer)?;
-        let expression_list = lower(&syntax_list)?;
-
-        for expression in &expression_list {
-            println!("{}", expression.disp().set_indent(2));
-        }
-
-        Ok(expression_list)
+        lower(&syntax_list)
     }
 
     #[test]

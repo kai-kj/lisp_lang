@@ -27,24 +27,25 @@ impl<T: PartialEq> PartialEq<Spanned<T>> for Spanned<T> {
 }
 
 pub trait SpannedExt: Sized {
-    fn span(self, span: Option<Span>) -> Spanned<Self> {
-        Spanned { value: self, span }
-    }
-
-    fn span_between(self, start: usize, end: usize) -> Spanned<Self> {
+    fn sbetween(self, start: usize, end: usize) -> Spanned<Self> {
         Spanned { value: self, span: Some(Span { start, end: end.max(start + 1) }) }
     }
 
-    fn span_join(self, start: Option<Span>, end: Option<Span>) -> Spanned<Self> {
-        if let (Some(start), Some(end)) = (start, end) {
-            self.span_between(start.start, end.end)
-        } else {
-            self.span_none()
-        }
+    #[cfg(test)]
+    fn snone(self) -> Spanned<Self> {
+        Spanned { value: self, span: None }
     }
 
-    fn span_none(self) -> Spanned<Self> {
-        Spanned { value: self, span: None }
+    fn sinherit<T>(self, parent: &Spanned<T>) -> Spanned<Self> {
+        Spanned { value: self, span: parent.span }
+    }
+
+    fn sjoin<T, U>(self, start: &Spanned<T>, end: &Spanned<U>) -> Spanned<Self> {
+        if let (Some(start), Some(end)) = (start.span, end.span) {
+            self.sbetween(start.start, end.end)
+        } else {
+            Spanned { value: self, span: None }
+        }
     }
 }
 

@@ -42,7 +42,7 @@ impl<'e, 's> Interpreter<'e, 's> {
     ) -> Result<Value<'s>, SRuntimeError> {
         match expression.value {
             Expression::Literal(v) => Ok(v),
-            Expression::Variable(v) => {
+            Expression::Symbol(v) => {
                 env.get(v).map(|v| v.clone()).map_err(|e| e.span(expression.span))
             }
             Expression::Call { call, args } => {
