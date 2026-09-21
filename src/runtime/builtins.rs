@@ -9,90 +9,68 @@ macro_rules! get_args {
         $(
             let $name = args_iter
                 .next()
-                .ok_or(RuntimeError::InvalidArgType)?;
+                .ok_or(RuntimeError::UnexpectedParamCount)?;
         )*
     };
 }
 
-pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFunction<'s>)> {
-    vec![
+pub fn make_builtins<'s>() -> [(&'static str, BuiltinFunction); 5] {
+    [
         (
             "+",
-            BuiltinFunction {
-                args: 2,
-                body: |args| {
-                    get_args!(args; a, b);
-                    match (a, b) {
-                        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
-                        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
-                        _ => Err(RuntimeError::InvalidArgType),
-                    }
-                },
-            },
+            BuiltinFunction::new(&["a", "b"], |_, args| {
+                get_args!(args; a, b);
+                match (a, b) {
+                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
+                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
+                    _ => Err(RuntimeError::UnexpectedParamType),
+                }
+            }),
         ),
         (
             "-",
-            BuiltinFunction {
-                args: 2,
-                body: |args| {
-                    get_args!(args; a, b);
-                    match (a, b) {
-                        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a - b)),
-                        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
-                        _ => Err(RuntimeError::InvalidArgType),
-                    }
-                },
-            },
+            BuiltinFunction::new(&["a", "b"], |_, args| {
+                get_args!(args; a, b);
+                match (a, b) {
+                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a - b)),
+                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
+                    _ => Err(RuntimeError::UnexpectedParamType),
+                }
+            }),
         ),
         (
             "*",
-            BuiltinFunction {
-                args: 2,
-                body: |args| {
-                    get_args!(args; a, b);
-                    match (a, b) {
-                        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a * b)),
-                        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-                        (Value::String(a), Value::Integer(b)) => {
-                            Ok(Value::String(a.repeat(*b as usize)))
-                        }
-                        _ => Err(RuntimeError::InvalidArgType),
+            BuiltinFunction::new(&["a", "b"], |session, args| {
+                get_args!(args; a, b);
+                match (a, b) {
+                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a * b)),
+                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
+                    (Value::String(a), Value::Integer(b)) => {
+                        let a = session.get_string(*a);
+                        Ok(Value::String(session.push_string(a.repeat(*b as usize))))
                     }
-                },
-            },
+                    _ => Err(RuntimeError::UnexpectedParamType),
+                }
+            }),
         ),
         (
             "/",
-            BuiltinFunction {
-                args: 2,
-                body: |args| {
-                    get_args!(args; a, b);
-                    match (a, b) {
-                        (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a / b)),
-                        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
-                        _ => Err(RuntimeError::InvalidArgType),
-                    }
-                },
-            },
+            BuiltinFunction::new(&["a", "b"], |_, args| {
+                get_args!(args; a, b);
+                match (a, b) {
+                    (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a / b)),
+                    (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
+                    _ => Err(RuntimeError::UnexpectedParamType),
+                }
+            }),
         ),
         (
             "print",
-            BuiltinFunction {
-                args: 1,
-                body: |args| {
-                    get_args!(args; a);
-                    match a {
-                        Value::Null => print!("null"),
-                        Value::Boolean(v) => print!("{}", v),
-                        Value::Integer(v) => print!("{}", v),
-                        Value::Float(v) => print!("{}", v),
-                        Value::String(v) => print!("{}", v),
-                        Value::BuiltinFunction(_) => print!("builtin_function"),
-                        Value::UserFunction(_) => print!("user_function"),
-                    }
-                    Ok(Value::Null)
-                },
-            },
+            BuiltinFunction::new(&["value"], |session, args| {
+                get_args!(args; value);
+                print!("{}", value.to_string(session));
+                Ok(Value::Null)
+            }),
         ),
     ]
 }
