@@ -30,11 +30,15 @@ pub enum Expression {
         t_branch: ExpressionId,
         f_branch: ExpressionId,
     },
-    Function {
+    Fn {
         params: ParamRange,
         body: ExpressionId,
     },
-    Define {
+    Def {
+        name: SymbolId,
+        value: ExpressionId,
+    },
+    Set {
         name: SymbolId,
         value: ExpressionId,
     },
@@ -95,11 +99,15 @@ pub enum OwnedExpression {
         t_branch: Box<OwnedExpression>,
         f_branch: Box<OwnedExpression>,
     },
-    Function {
+    Fn {
         args: Vec<String>,
         body: Box<OwnedExpression>,
     },
-    Define {
+    Def {
+        name: String,
+        value: Box<OwnedExpression>,
+    },
+    Set {
         name: String,
         value: Box<OwnedExpression>,
     },
@@ -132,7 +140,7 @@ impl ExpressionId {
                 t_branch: Box::new(t_branch.to_owned(session)),
                 f_branch: Box::new(f_branch.to_owned(session)),
             },
-            Expression::Function { params, body } => OwnedExpression::Function {
+            Expression::Fn { params, body } => OwnedExpression::Fn {
                 args: session
                     .get_params(params)
                     .iter()
@@ -140,7 +148,11 @@ impl ExpressionId {
                     .collect(),
                 body: Box::new(body.to_owned(session)),
             },
-            Expression::Define { name, value } => OwnedExpression::Define {
+            Expression::Def { name, value } => OwnedExpression::Def {
+                name: session.get_symbol(name).to_string(),
+                value: Box::new(value.to_owned(session)),
+            },
+            Expression::Set { name, value } => OwnedExpression::Set {
                 name: session.get_symbol(name).to_string(),
                 value: Box::new(value.to_owned(session)),
             },

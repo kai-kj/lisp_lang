@@ -2,7 +2,7 @@ use crate::{
     expression::{ExpressionId, StringId},
     runtime::{
         error::RuntimeError,
-        session::{BuiltinFunctionId, ParamRange, Session, UserFunctionId},
+        session::{BuiltinFunctionId, EnvironmentId, ParamRange, Session, UserFunctionId},
     },
 };
 
@@ -59,6 +59,7 @@ impl Value {
 pub struct UserFunction {
     pub params: ParamRange,
     pub body: ExpressionId,
+    pub env: EnvironmentId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

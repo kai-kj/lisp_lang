@@ -10,13 +10,13 @@ pub enum RuntimeError {
     ParserError(ParserError),
     UnexpectedParamCount,
     UnexpectedParamType,
-    VariableAlreadyDefined,
+    // VariableAlreadyDefined,
     VariableNotDefined,
     NotAFunction,
 }
 
 impl From<SParserError> for SRuntimeError {
     fn from(error: SParserError) -> Self {
-        RuntimeError::ParserError(error.value).sinherit(&error)
+        RuntimeError::ParserError(error.value).scopy(error.span)
     }
 }

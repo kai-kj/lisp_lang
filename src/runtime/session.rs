@@ -1,13 +1,10 @@
-use {
-    crate::{
-        expression::{ExpressionId, ExpressionRange, SExpression, StringId, SymbolId, SymbolTable},
-        runtime::{
-            error::RuntimeError,
-            value::{BuiltinFunction, UserFunction, Value},
-        },
-        util::{Arena, ArenaId},
+use crate::{
+    expression::{ExpressionId, ExpressionRange, SExpression, StringId, SymbolId, SymbolTable},
+    runtime::{
+        environment::Environment,
+        value::{BuiltinFunction, UserFunction},
     },
-    std::{cell::RefCell, collections::HashMap, rc::Rc},
+    util::{Arena, ArenaId},
 };
 
 pub struct Session {
@@ -17,7 +14,7 @@ pub struct Session {
     params: Vec<SymbolId>,
     builtin_functions: Vec<BuiltinFunction>,
     user_functions: Vec<UserFunction>,
-    environments: Vec<Rc<Environment>>,
+    environments: Vec<Environment>,
 }
 
 impl Session {
@@ -98,17 +95,30 @@ impl Session {
         UserFunctionId(self.user_functions.len() - 1)
     }
 
-    pub fn root_environment(&mut self) -> Rc<Environment> {
-        let env = Environment::new();
-        self.environments.push(env.clone());
-        env
+    pub fn get_environment(&self, id: EnvironmentId) -> &Environment {
+        &self.environments[id.0]
     }
 
-    pub fn child_environment(&mut self, parent: &Rc<Environment>) -> Rc<Environment> {
-        let env = parent.child();
-        self.environments.push(env.clone());
-        env
+    pub fn get_environment_mut(&mut self, id: EnvironmentId) -> &mut Environment {
+        &mut self.environments[id.0]
     }
+
+    pub fn push_environment(&mut self, env: Environment) -> EnvironmentId {
+        self.environments.push(env);
+        EnvironmentId(self.environments.len() - 1)
+    }
+
+    // pub fn root_environment(&mut self) -> Rc<Environment> {
+    //     let env = Environment::new();
+    //     self.environments.push(env.clone());
+    //     env
+    // }
+    //
+    // pub fn child_environment(&mut self, parent: &Rc<Environment>) -> Rc<Environment> {
+    //     let env = parent.child();
+    //     self.environments.push(env.clone());
+    //     env
+    // }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -138,38 +148,5 @@ impl std::fmt::Display for UserFunctionId {
     }
 }
 
-pub struct Environment {
-    parent: Option<Rc<Environment>>,
-    binds: RefCell<HashMap<SymbolId, Value>>,
-}
-
-impl Environment {
-    pub fn new() -> Rc<Self> {
-        Rc::new(Self { parent: None, binds: RefCell::new(HashMap::new()) })
-    }
-
-    pub fn child(self: &Rc<Self>) -> Rc<Self> {
-        Rc::new(Self { parent: Some(self.clone()), binds: RefCell::new(HashMap::new()) })
-    }
-
-    pub fn set(self: &Rc<Self>, name: SymbolId, value: Value) -> Result<(), RuntimeError> {
-        // if self.binds.borrow().contains_key(&name) {
-        //     Err(RuntimeError::VariableAlreadyDefined)
-        // } else {
-        //     self.binds.borrow_mut().insert(name, value);
-        //     Ok(())
-        // }
-        self.binds.borrow_mut().insert(name, value);
-        Ok(())
-    }
-
-    pub fn get(self: &Rc<Self>, name: SymbolId) -> Result<Value, RuntimeError> {
-        if let Some(v) = self.binds.borrow().get(&name) {
-            Ok(*v)
-        } else if let Some(parent) = &self.parent {
-            parent.get(name)
-        } else {
-            Err(RuntimeError::VariableNotDefined)
-        }
-    }
-}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnvironmentId(usize);

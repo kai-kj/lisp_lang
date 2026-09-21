@@ -31,13 +31,29 @@ pub trait SpannedExt: Sized {
         Spanned { value: self, span }
     }
 
-    fn sinherit<T>(self, parent: &Spanned<T>) -> Spanned<Self> {
-        self.scopy(parent.span)
-    }
-
     fn sjoin<T, U>(self, start: &Spanned<T>, end: &Spanned<U>) -> Spanned<Self> {
         self.sbetween(start.span.start, end.span.end)
     }
 }
 
 impl<T> SpannedExt for T {}
+
+pub trait ResultSpannedExt<T, E> {
+    fn err_sbetween(self, start: usize, end: usize) -> Result<T, Spanned<E>>;
+    fn err_scopy(self, span: Span) -> Result<T, Spanned<E>>;
+    fn err_sjoin<A, B>(self, start: &Spanned<A>, end: &Spanned<B>) -> Result<T, Spanned<E>>;
+}
+
+impl<T, E> ResultSpannedExt<T, E> for Result<T, E> {
+    fn err_sbetween(self, start: usize, end: usize) -> Result<T, Spanned<E>> {
+        self.map_err(|err| err.sbetween(start, end))
+    }
+
+    fn err_scopy(self, span: Span) -> Result<T, Spanned<E>> {
+        self.map_err(|err| err.scopy(span))
+    }
+
+    fn err_sjoin<A, B>(self, start: &Spanned<A>, end: &Spanned<B>) -> Result<T, Spanned<E>> {
+        self.map_err(|err| err.sjoin(start, end))
+    }
+}

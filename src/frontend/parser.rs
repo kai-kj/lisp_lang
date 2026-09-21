@@ -82,7 +82,10 @@ impl Parser {
                 self.parse_fn(session, reader, parent_span)?
             }
             Event::Symbol(v) if v == ReservedSymbols::DEF => {
-                self.parse_def(session, reader, parent_span)?
+                self.parse_def_or_set(session, reader, parent_span, true)?
+            }
+            Event::Symbol(v) if v == ReservedSymbols::SET => {
+                self.parse_def_or_set(session, reader, parent_span, false)?
             }
             Event::Symbol(v) if v == ReservedSymbols::QUOTE => panic!("quote not supported yet"),
             Event::ListEnd => self.push_expression(session, Expression::Null, parent_span)?,
@@ -182,20 +185,17 @@ impl Parser {
         let body = self.parse_expression(session, reader)?;
 
         Self::consume_list_end(reader)?;
-        self.push_expression(
-            session,
-            Expression::Function { params: param_range, body },
-            parent_span,
-        )
+        self.push_expression(session, Expression::Fn { params: param_range, body }, parent_span)
     }
 
-    fn parse_def(
+    fn parse_def_or_set(
         &mut self,
         session: &mut Session,
         reader: &mut Reader<'_>,
         parent_span: Span,
+        is_def: bool,
     ) -> Result<ExpressionId, SParserError> {
-        reader.next()?; // consume "def"
+        reader.next()?; // consume "def" / "set"
 
         let name = reader.next()?;
         let name = match name.value {
@@ -207,7 +207,12 @@ impl Parser {
         let value = self.parse_expression(session, reader)?;
 
         Self::consume_list_end(reader)?;
-        self.push_expression(session, Expression::Define { name, value }, parent_span)
+
+        if is_def {
+            self.push_expression(session, Expression::Def { name, value }, parent_span)
+        } else {
+            self.push_expression(session, Expression::Set { name, value }, parent_span)
+        }
     }
 
     fn consume_list_end(reader: &mut Reader<'_>) -> Result<(), SParserError> {
@@ -241,6 +246,7 @@ impl ReservedSymbols {
     const IF: &'static str = "if";
     const FN: &'static str = "fn";
     const DEF: &'static str = "def";
+    const SET: &'static str = "set";
     const QUOTE: &'static str = "quote";
     const NULL: &'static str = "null";
     const TRUE: &'static str = "true";
@@ -253,6 +259,7 @@ impl ReservedSymbols {
                 | ReservedSymbols::IF
                 | ReservedSymbols::FN
                 | ReservedSymbols::DEF
+                | ReservedSymbols::SET
                 | ReservedSymbols::QUOTE
                 | ReservedSymbols::NULL
                 | ReservedSymbols::TRUE
@@ -276,7 +283,7 @@ pub enum ParserError {
 
 impl From<Spanned<ReaderError>> for Spanned<ParserError> {
     fn from(error: Spanned<ReaderError>) -> Self {
-        ParserError::ReaderError(error.value).sinherit(&error)
+        ParserError::ReaderError(error.value).scopy(error.span)
     }
 }
 
@@ -317,14 +324,14 @@ mod tests {
         };
 
         (@expr Function(($($param:expr),* $(,)?), $body:ident $( $body_args:tt )? $(,)?)) => {
-            OwnedExpression::Function {
+            OwnedExpression::Fn {
                 args: vec![$($param.into()),*],
                 body: Box::new(expressions!(@expr $body $( $body_args )?)),
             }
         };
 
         (@expr Define($name:expr, $value:ident $( $value_args:tt )? $(,)?)) => {
-            OwnedExpression::Define {
+            OwnedExpression::Def {
                 name: $name.into(),
                 value: Box::new(expressions!(@expr $value $( $value_args )?)),
             }
