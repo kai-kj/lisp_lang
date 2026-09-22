@@ -88,7 +88,10 @@ impl Parser {
                 self.parse_def_or_set(session, reader, parent_span, false)?
             }
             Event::Symbol(v) if v == ReservedSymbols::QUOTE => panic!("quote not supported yet"),
-            Event::ListEnd => self.push_expression(session, Expression::Null, parent_span)?,
+            Event::ListEnd => {
+                reader.next()?; // consume list end
+                self.push_expression(session, Expression::Null, parent_span)?
+            }
             _ => self.parse_call(session, reader, parent_span)?,
         };
 
