@@ -1,7 +1,7 @@
 use {
     crate::runtime::{
         error::RuntimeError,
-        value::{BuiltinFunction, Value},
+        value::{BuiltinFn, Value},
     },
     std::rc::Rc,
 };
@@ -26,46 +26,46 @@ macro_rules! numerical_bin_op {
     };
 }
 
-pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFunction)> {
+pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFn)> {
     vec![
         (
             "and",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 if !a.is_truthy() { Ok(b.clone()) } else { Ok(a.clone()) }
             }),
         ),
         (
             "or",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 if a.is_truthy() { Ok(a.clone()) } else { Ok(b.clone()) }
             }),
         ),
         (
             "not",
-            BuiltinFunction::new(&["a"], |_, args| {
+            BuiltinFn::new(&["a"], |_, args| {
                 get_args!(args; a);
                 if a.is_truthy() { Ok(false.into()) } else { Ok(true.into()) }
             }),
         ),
         (
             "+",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, +)
             }),
         ),
         (
             "-",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, -)
             }),
         ),
         (
             "*",
-            BuiltinFunction::new(&["a", "b"], |session, args| {
+            BuiltinFn::new(&["a", "b"], |session, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(
                     a, b, *,
@@ -77,14 +77,14 @@ pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFunction)> {
         ),
         (
             "/",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, /)
             }),
         ),
         (
             "=",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 match (a, b) {
                     (Value::Null, Value::Null) => Ok(Value::Boolean(true)),
@@ -92,46 +92,59 @@ pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFunction)> {
                     (Value::Integer(a), Value::Integer(b)) => Ok((a == b).into()),
                     (Value::Float(a), Value::Float(b)) => Ok((a == b).into()),
                     (Value::String(a), Value::String(b)) => Ok((a == b).into()),
-                    (Value::BuiltinFunction(a), Value::BuiltinFunction(b)) => Ok((a == b).into()),
-                    (Value::UserFunction(a), Value::UserFunction(b)) => Ok((a == b).into()),
+                    (Value::BuiltinFn(a), Value::BuiltinFn(b)) => Ok((a == b).into()),
+                    (Value::UserFn(a), Value::UserFn(b)) => Ok((a == b).into()),
                     _ => Ok(false.into()),
                 }
             }),
         ),
         (
             "<",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, <)
             }),
         ),
         (
             ">",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, >)
             }),
         ),
         (
             "<=",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, <=)
             }),
         ),
         (
             ">=",
-            BuiltinFunction::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, >=)
             }),
         ),
         (
             "print",
-            BuiltinFunction::new(&["value"], |session, args| {
+            BuiltinFn::new(&["value"], |session, args| {
                 get_args!(args; value);
                 print!("{}", value.to_string(session));
                 Ok(Value::Null)
+            }),
+        ),
+        (
+            "cons",
+            BuiltinFn::new(&["head", "tail"], |_, args| {
+                get_args!(args; head, tail);
+                let mut values = vec![head.clone()];
+                match tail {
+                    Value::Null => {}
+                    Value::List(tail) => values.extend(tail.iter().cloned()),
+                    _ => return Err(RuntimeError::UnexpectedParamType),
+                }
+                Ok(Value::List(Rc::new(values)))
             }),
         ),
     ]

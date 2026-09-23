@@ -62,3 +62,13 @@ impl<V> ArenaId<V> {
         Self(id, PhantomData)
     }
 }
+
+#[macro_export]
+macro_rules! check {
+    ($condition:expr, $error:expr) => {
+        if !$condition {
+            return $error;
+        }
+    };
+}
+pub use check;

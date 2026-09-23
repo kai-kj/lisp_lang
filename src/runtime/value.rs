@@ -19,8 +19,8 @@ pub enum Value {
     Integer(i64),
     Float(f64),
     String(Rc<String>),
-    BuiltinFunction(Rc<BuiltinFunction>),
-    UserFunction(Rc<UserFunction>),
+    BuiltinFn(Rc<BuiltinFn>),
+    UserFn(Rc<UserFn>),
 }
 
 impl Value {
@@ -33,8 +33,8 @@ impl Value {
             Value::Integer(v) => *v != 0,
             Value::Float(v) => *v != 0.0,
             Value::String(v) => v.is_empty(),
-            Value::BuiltinFunction(_) => true,
-            Value::UserFunction(_) => true,
+            Value::BuiltinFn(_) => true,
+            Value::UserFn(_) => true,
         }
     }
 
@@ -50,14 +50,14 @@ impl Value {
             Value::Integer(v) => format!("{}", v),
             Value::Float(v) => format!("{}", v),
             Value::String(v) => format!("{}", v),
-            Value::BuiltinFunction(v) => {
+            Value::BuiltinFn(v) => {
                 let p = v.params.iter().map(|p| p.to_string()).collect::<Vec<_>>();
-                format!("BuiltinFunction({})", p.join(", "))
+                format!("BuiltinFn({})", p.join(", "))
             }
-            Value::UserFunction(v) => {
+            Value::UserFn(v) => {
                 let p = session.get_params(v.params);
                 let p = p.iter().map(|p| session.get_symbol(*p).to_string()).collect::<Vec<_>>();
-                format!("UserFunction({})", p.join(", "))
+                format!("UserFn({})", p.join(", "))
             }
         }
     }
@@ -74,14 +74,14 @@ impl Value {
             Value::Integer(v) => format!("Integer({})", v),
             Value::Float(v) => format!("Float({})", v),
             Value::String(v) => format!("String(\"{:?}\")", v),
-            Value::BuiltinFunction(v) => {
+            Value::BuiltinFn(v) => {
                 let p = v.params.iter().map(|p| p.to_string()).collect::<Vec<_>>();
-                format!("BuiltinFunction({})", p.join(", "))
+                format!("BuiltinFn({})", p.join(", "))
             }
-            Value::UserFunction(v) => {
+            Value::UserFn(v) => {
                 let p = session.get_params(v.params);
                 let p = p.iter().map(|p| session.get_symbol(*p).to_string()).collect::<Vec<_>>();
-                format!("UserFunction({})", p.join(", "))
+                format!("UserFn({})", p.join(", "))
             }
         }
     }
@@ -111,19 +111,19 @@ pub struct List {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct UserFunction {
+pub struct UserFn {
     pub params: ParamRange,
     pub body: ExpressionId,
     pub env: Rc<Environment>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct BuiltinFunction {
+pub struct BuiltinFn {
     pub params: &'static [&'static str],
     pub body: fn(&mut Session, &[Value]) -> Result<Value, RuntimeError>,
 }
 
-impl BuiltinFunction {
+impl BuiltinFn {
     pub fn new(
         params: &'static [&'static str],
         body: fn(&mut Session, &[Value]) -> Result<Value, RuntimeError>,

@@ -22,6 +22,10 @@ impl Environment {
     }
 
     pub fn def(self: &Rc<Environment>, name: SymbolId, value: Value) -> Result<(), RuntimeError> {
+        if self.binds.borrow().contains_key(&name) {
+            return Err(RuntimeError::VariableAlreadyDefined);
+        }
+
         self.binds.borrow_mut().insert(name, value);
         Ok(())
     }

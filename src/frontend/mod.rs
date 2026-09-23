@@ -1,3 +1,4 @@
 pub mod event;
 pub mod parser;
-pub mod reader;
+pub mod string_reader;
+pub mod value_reader;

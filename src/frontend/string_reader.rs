@@ -1,12 +1,12 @@
 use crate::{
-    frontend::event::{Event, SEvent},
-    span::{Spanned, SpannedExt},
+    frontend::event::{Event, EventEmitter, EventError, SEvent, SEventError},
+    span::SpannedExt,
 };
 
-pub struct Reader<'s> {
+pub struct StringReader<'s> {
     source: &'s str,
     pos: usize,
-    next: Result<SEvent, SReaderError>,
+    next: Result<SEvent, SEventError>,
 }
 
 macro_rules! event {
@@ -17,27 +17,18 @@ macro_rules! event {
 
 macro_rules! error {
     ($kind:ident, $start:expr, $end:expr) => {
-        Err(ReaderError::$kind.sbetween($start, $end))
+        Err(EventError::$kind.sbetween($start, $end))
     };
 }
 
-impl<'s> Reader<'s> {
+impl<'s> StringReader<'s> {
     pub fn new(source: &'s str) -> Self {
         let mut lexer = Self { source, pos: 0, next: event!(SourceEnd, 0, 1) };
         lexer.next = lexer.scan();
         lexer
     }
 
-    pub fn peek(&self) -> Result<&SEvent, SReaderError> {
-        self.next.as_ref().map_err(|err| *err)
-    }
-
-    pub fn next(&mut self) -> Result<SEvent, SReaderError> {
-        let next = self.scan();
-        std::mem::replace(&mut self.next, next)
-    }
-
-    fn scan(&mut self) -> Result<SEvent, SReaderError> {
+    fn scan(&mut self) -> Result<SEvent, SEventError> {
         self.advance_while(|_, c| c.is_whitespace());
         let start_pos = self.pos;
 
@@ -140,12 +131,15 @@ impl<'s> Reader<'s> {
     }
 }
 
-pub type SReaderError = Spanned<ReaderError>;
+impl<'s> EventEmitter for StringReader<'s> {
+    fn peek(&self) -> Result<&SEvent, SEventError> {
+        self.next.as_ref().map_err(|err| *err)
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ReaderError {
-    UnexpectedEscapeSequence,
-    UnterminatedString,
+    fn next(&mut self) -> Result<SEvent, SEventError> {
+        let next = self.scan();
+        std::mem::replace(&mut self.next, next)
+    }
 }
 
 #[cfg(test)]
@@ -158,8 +152,8 @@ mod tests {
         };
     }
 
-    fn read_str_to_event_vec(input: &str) -> Result<Vec<Event>, SReaderError> {
-        let mut reader = Reader::new(input);
+    fn read_str_to_event_vec(input: &str) -> Result<Vec<Event>, SEventError> {
+        let mut reader = StringReader::new(input);
         let mut events = vec![];
         loop {
             match reader.next() {

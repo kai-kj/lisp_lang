@@ -1,17 +1,26 @@
 use {
     crate::{
-        expression::{Expression, ExpressionId, ExpressionRange},
+        backend::evaluator::Evaluator,
+        check,
+        expression::{BindKind, Expression, ExpressionId, ExpressionRange, SExpression, SymbolId},
         frontend::{
-            event::Event,
-            reader::{Reader, ReaderError},
+            event::{Event, EventEmitter, EventError, SEventError},
+            value_reader::ValueReader,
         },
-        runtime::session::{ParamRange, Session},
+        runtime::{
+            builtins::make_builtins,
+            error::{RuntimeError, SRuntimeError},
+            session::{ParamRange, Session},
+            value::UserFn,
+        },
         span::{Span, Spanned, SpannedExt},
     },
-    std::cmp::PartialEq,
+    std::{cmp::PartialEq, collections::HashMap},
 };
 
 pub struct Parser {
+    evaluator: Evaluator,
+    macros: HashMap<SymbolId, UserFn>,
     scratch: Vec<ExpressionId>,
 }
 
@@ -22,189 +31,312 @@ macro_rules! error {
 }
 
 impl Parser {
-    pub fn new() -> Self {
-        Self { scratch: Vec::new() }
+    pub fn new(session: &mut Session) -> Self {
+        Self {
+            evaluator: Evaluator::new(session, make_builtins()),
+            macros: HashMap::new(),
+            scratch: Vec::new(),
+        }
     }
 
     pub fn parse(
         mut self,
         session: &mut Session,
-        reader: &mut Reader<'_>,
+        events: &mut dyn EventEmitter,
     ) -> Result<ExpressionRange, SParserError> {
-        while reader.peek()?.value != Event::SourceEnd {
-            let root = self.parse_expression(session, reader)?;
+        while events.peek()?.value != Event::SourceEnd {
+            let root = self.parse_expr(session, events, true)?;
+            let root = self.push_expr(session, root)?;
             self.scratch.push(root);
         }
         Ok(self.push_scratch(session, 0))
     }
 
-    fn parse_expression(
+    fn parse_expr(
         &mut self,
         session: &mut Session,
-        reader: &mut Reader<'_>,
-    ) -> Result<ExpressionId, SParserError> {
-        let event = reader.next()?;
+        events: &mut dyn EventEmitter,
+        is_top: bool,
+    ) -> Result<SExpression, SParserError> {
+        let event = events.next()?;
 
-        let result = match event.value {
-            Event::ListStart => return self.parse_list(session, reader, event.span),
-            Event::ListEnd => return error!(UnexpectedListEnd, event.span),
-            Event::SourceEnd => return error!(UnexpectedSourceEnd, event.span),
-            Event::Quote => return self.parse_expression_quoted(session, reader),
-            Event::Symbol(name) if name == ReservedSymbols::NULL => Expression::Null,
-            Event::Symbol(name) if name == ReservedSymbols::TRUE => Expression::Boolean(true),
-            Event::Symbol(name) if name == ReservedSymbols::FALSE => Expression::Boolean(false),
-            Event::Symbol(name) if ReservedSymbols::matches(&name) => {
-                return error!(UnexpectedReservedSymbol, event.span);
+        match event.value {
+            Event::ListStart => self.parse_list(session, events, event.span, is_top),
+            Event::ListEnd => error!(UnexpectedListEnd, event.span),
+            Event::SourceEnd => error!(UnexpectedSourceEnd, event.span),
+            Event::Quote => self.parse_expr_quoted(session, events),
+            Event::Symbol(name) if name == ReservedSymbols::NULL => {
+                Ok(Expression::Null.scopy(event.span))
             }
-            Event::Symbol(name) => Expression::Symbol(session.push_symbol(&name)),
-            Event::Integer(value) => Expression::Integer(value),
-            Event::Float(value) => Expression::Float(value),
-            Event::String(value) => Expression::String(session.push_string(&value)),
-        };
-
-        self.push_expression(session, result, event.span)
+            Event::Symbol(name) if name == ReservedSymbols::TRUE => {
+                Ok(Expression::Boolean(true).scopy(event.span))
+            }
+            Event::Symbol(name) if name == ReservedSymbols::FALSE => {
+                Ok(Expression::Boolean(false).scopy(event.span))
+            }
+            Event::Symbol(name) if ReservedSymbols::matches(&name) => {
+                error!(UnexpectedReservedSymbol, event.span)
+            }
+            Event::Symbol(name) => {
+                Ok(Expression::Symbol(session.push_symbol(&name)).scopy(event.span))
+            }
+            Event::Integer(value) => Ok(Expression::Integer(value).scopy(event.span)),
+            Event::Float(value) => Ok(Expression::Float(value).scopy(event.span)),
+            Event::String(value) => {
+                Ok(Expression::String(session.push_string(&value)).scopy(event.span))
+            }
+        }
     }
 
-    fn parse_expression_quoted(
+    fn parse_expr_quoted(
         &mut self,
         session: &mut Session,
-        reader: &mut Reader<'_>,
-    ) -> Result<ExpressionId, SParserError> {
-        let event = reader.next()?;
+        events: &mut dyn EventEmitter,
+    ) -> Result<SExpression, SParserError> {
+        let event = events.next()?;
 
-        let result = match event.value {
-            Event::ListStart => return self.parse_list_quoted(session, reader, event.span),
-            Event::ListEnd => return error!(UnexpectedListEnd, event.span),
-            Event::Quote => Expression::Symbol(session.push_symbol("quote")),
-            Event::Symbol(v) => Expression::Symbol(session.push_symbol(&v)),
-            Event::Integer(v) => Expression::Integer(v),
-            Event::Float(v) => Expression::Float(v),
-            Event::String(v) => Expression::String(session.push_string(&v)),
-            Event::SourceEnd => return error!(UnexpectedSourceEnd, event.span),
-        };
+        match event.value {
+            Event::ListStart => self.parse_list_quoted(session, events, event.span),
+            Event::ListEnd => error!(UnexpectedListEnd, event.span),
+            Event::Quote => {
+                let quote = Expression::SymbolQ(session.push_symbol("quote")).scopy(event.span);
+                let quote = self.push_expr(session, quote)?;
 
-        self.push_expression(session, result, event.span)
+                let value = self.parse_expr_quoted(session, events)?;
+                let value = self.push_expr(session, value)?;
+
+                let start = self.scratch.len();
+                self.scratch.push(quote);
+                self.scratch.push(value);
+                Ok(Expression::List(self.push_scratch(session, start)).scopy(event.span))
+            }
+            Event::Symbol(v) => Ok(Expression::SymbolQ(session.push_symbol(&v)).scopy(event.span)),
+            Event::Integer(v) => Ok(Expression::Integer(v).scopy(event.span)),
+            Event::Float(v) => Ok(Expression::Float(v).scopy(event.span)),
+            Event::String(v) => Ok(Expression::String(session.push_string(&v)).scopy(event.span)),
+            Event::SourceEnd => error!(UnexpectedSourceEnd, event.span),
+        }
     }
 
     fn parse_list(
         &mut self,
         session: &mut Session,
-        reader: &mut Reader<'_>,
-        parent_span: Span,
-    ) -> Result<ExpressionId, SParserError> {
-        let result = match &reader.peek()?.value {
-            Event::Symbol(v) if v == ReservedSymbols::DO => {
-                self.parse_do(session, reader, parent_span)?
+        events: &mut dyn EventEmitter,
+        p_span: Span,
+        is_top: bool,
+    ) -> Result<SExpression, SParserError> {
+        match &events.peek()?.value {
+            Event::Symbol(v) if v == ReservedSymbols::QUOTE => {
+                self.parse_quote(session, events, p_span)
             }
-            Event::Symbol(v) if v == ReservedSymbols::IF => {
-                self.parse_if(session, reader, parent_span)?
-            }
+            Event::Symbol(v) if v == ReservedSymbols::DO => self.parse_do(session, events, p_span),
+            Event::Symbol(v) if v == ReservedSymbols::IF => self.parse_if(session, events, p_span),
             Event::Symbol(v) if v == ReservedSymbols::FN => {
-                self.parse_fn(session, reader, parent_span)?
+                let (_, params, body) = self.parse_callable(session, events, false)?;
+                Ok(Expression::Fn { params, body }.scopy(p_span))
             }
             Event::Symbol(v) if v == ReservedSymbols::DEF => {
-                self.parse_def_or_set(session, reader, parent_span, true)?
+                self.parse_bind(session, events, p_span, BindKind::Def)
             }
             Event::Symbol(v) if v == ReservedSymbols::SET => {
-                self.parse_def_or_set(session, reader, parent_span, false)?
+                self.parse_bind(session, events, p_span, BindKind::Set)
             }
-            Event::Symbol(v) if v == ReservedSymbols::QUOTE => {
-                self.parse_quote(session, reader, parent_span)?
+            Event::Symbol(v) if v == ReservedSymbols::DEF_MACRO => {
+                check!(is_top, Err(ParserError::UnexpectedMacroDefinition.scopy(p_span)));
+                let (name, params, body) = self.parse_callable(session, events, true)?;
+                check!(
+                    !self.macros.contains_key(&name.unwrap()),
+                    Err(ParserError::MacroAlreadyDefined.scopy(p_span))
+                );
+                self.macros.insert(
+                    name.unwrap(),
+                    UserFn { params, body, env: self.evaluator.get_root_env().clone() },
+                );
+                Ok(Expression::Null.scopy(p_span))
             }
             Event::ListEnd => {
-                reader.next()?; // consume list end
-                self.push_expression(session, Expression::Null, parent_span)?
+                events.next()?; // consume list end
+                Ok(Expression::Null.scopy(p_span))
             }
-            _ => self.parse_call(session, reader, parent_span)?,
-        };
-
-        Ok(result)
+            _ => {
+                let call = self.parse_expr(session, events, false)?;
+                if let Expression::Symbol(call) = call.value {
+                    if let Some(call) = self.macros.get(&call).map(|v| v.to_owned()) {
+                        return self.parse_call_macro(session, events, &call, p_span);
+                    }
+                }
+                self.parse_call_fn(session, events, call, p_span)
+            }
+        }
     }
 
     fn parse_list_quoted(
         &mut self,
         session: &mut Session,
-        reader: &mut Reader<'_>,
-        parent_span: Span,
-    ) -> Result<ExpressionId, SParserError> {
+        events: &mut dyn EventEmitter,
+        p_span: Span,
+    ) -> Result<SExpression, SParserError> {
         let scratch_start = self.scratch.len();
 
-        while reader.peek()?.value != Event::ListEnd {
-            let child = self.parse_expression_quoted(session, reader)?;
+        while events.peek()?.value != Event::ListEnd {
+            let child = self.parse_expr_quoted(session, events)?;
+            let child = self.push_expr(session, child)?;
             self.scratch.push(child);
         }
 
         let body = self.push_scratch(session, scratch_start);
 
-        Self::consume_list_end(reader)?;
-        self.push_expression(session, Expression::List(body), parent_span)
+        Self::consume_list_end(events)?;
+        Ok(Expression::List(body).scopy(p_span))
+    }
+
+    fn parse_quote(
+        &mut self,
+        session: &mut Session,
+        events: &mut dyn EventEmitter,
+        _parent_span: Span,
+    ) -> Result<SExpression, SParserError> {
+        events.next()?; // consume "quote"
+        let value = self.parse_expr_quoted(session, events)?;
+        Self::consume_list_end(events)?;
+        Ok(value)
     }
 
     fn parse_do(
         &mut self,
         session: &mut Session,
-        reader: &mut Reader<'_>,
-        parent_span: Span,
-    ) -> Result<ExpressionId, SParserError> {
-        reader.next()?; // consume "do"
+        events: &mut dyn EventEmitter,
+        p_span: Span,
+    ) -> Result<SExpression, SParserError> {
+        events.next()?; // consume "do"
 
         let scratch_start = self.scratch.len();
-        while reader.peek()?.value != Event::ListEnd {
-            let child = self.parse_expression(session, reader)?;
+        while events.peek()?.value != Event::ListEnd {
+            let child = self.parse_expr(session, events, false)?;
+            let child = self.push_expr(session, child)?;
             self.scratch.push(child);
         }
 
         let body = self.push_scratch(session, scratch_start);
 
-        Self::consume_list_end(reader)?;
-        self.push_expression(session, Expression::Do(body), parent_span)
+        Self::consume_list_end(events)?;
+        Ok(Expression::Do(body).scopy(p_span))
     }
 
-    fn parse_call(
+    fn parse_call_fn(
         &mut self,
         session: &mut Session,
-        reader: &mut Reader<'_>,
-        parent_span: Span,
-    ) -> Result<ExpressionId, SParserError> {
-        let call = self.parse_expression(session, reader)?;
+        events: &mut dyn EventEmitter,
+        call: SExpression,
+        p_span: Span,
+    ) -> Result<SExpression, SParserError> {
+        let call = self.push_expr(session, call)?;
 
         let scratch_start = self.scratch.len();
-        while reader.peek()?.value != Event::ListEnd {
-            let arg = self.parse_expression(session, reader)?;
+        while events.peek()?.value != Event::ListEnd {
+            let arg = self.parse_expr(session, events, false)?;
+            let arg = self.push_expr(session, arg)?;
             self.scratch.push(arg);
         }
 
         let args = self.push_scratch(session, scratch_start);
 
-        Self::consume_list_end(reader)?;
-        self.push_expression(session, Expression::Call { call, args }, parent_span)
+        Self::consume_list_end(events)?;
+        Ok(Expression::Call { call, args }.scopy(p_span))
+    }
+
+    fn parse_call_macro(
+        &mut self,
+        session: &mut Session,
+        events: &mut dyn EventEmitter,
+        call: &UserFn,
+        p_span: Span,
+    ) -> Result<SExpression, SParserError> {
+        let scratch_start = self.scratch.len();
+
+        while events.peek()?.value != Event::ListEnd {
+            let arg = self.parse_expr_quoted(session, events)?;
+            let arg = self.push_expr(session, arg)?;
+            self.scratch.push(arg);
+        }
+
+        let args = self.push_scratch(session, scratch_start);
+        let args = session.get_expressions(args).to_owned();
+
+        Self::consume_list_end(events)?;
+
+        let expanded = self.evaluator.evaluate_macro(session, call, &args, p_span)?;
+        let mut events = ValueReader::new(session, expanded, p_span)?;
+
+        let expanded = self.parse_expr(session, &mut events, false)?;
+
+        Ok(expanded)
     }
 
     fn parse_if(
         &mut self,
         session: &mut Session,
-        reader: &mut Reader<'_>,
-        parent_span: Span,
-    ) -> Result<ExpressionId, SParserError> {
-        reader.next()?; // consume "if"
+        events: &mut dyn EventEmitter,
+        p_span: Span,
+    ) -> Result<SExpression, SParserError> {
+        events.next()?; // consume "if"
 
-        let cond = self.parse_expression(session, reader)?;
-        let t_branch = self.parse_expression(session, reader)?;
-        let f_branch = self.parse_expression(session, reader)?;
+        let cond = self.parse_expr(session, events, false)?;
+        let cond = self.push_expr(session, cond)?;
 
-        Self::consume_list_end(reader)?;
-        self.push_expression(session, Expression::If { cond, t_branch, f_branch }, parent_span)
+        let t_branch = self.parse_expr(session, events, false)?;
+        let t_branch = self.push_expr(session, t_branch)?;
+
+        let f_branch = self.parse_expr(session, events, false)?;
+        let f_branch = self.push_expr(session, f_branch)?;
+
+        Self::consume_list_end(events)?;
+        Ok(Expression::If { cond, t_branch, f_branch }.scopy(p_span))
     }
 
-    fn parse_fn(
+    fn parse_bind(
         &mut self,
         session: &mut Session,
-        reader: &mut Reader<'_>,
-        parent_span: Span,
-    ) -> Result<ExpressionId, SParserError> {
-        reader.next()?; // consume "fn"
+        events: &mut dyn EventEmitter,
+        p_span: Span,
+        kind: BindKind,
+    ) -> Result<SExpression, SParserError> {
+        events.next()?; // consume "def" / "set"
 
-        let list_start = reader.next()?;
+        let name = events.next()?;
+        let name = match name.value {
+            Event::Symbol(name) if !ReservedSymbols::matches(&name) => session.push_symbol(&name),
+            Event::Symbol(_) => return error!(UnexpectedReservedSymbol, name.span),
+            _ => return error!(ExpectedSymbol, name.span),
+        };
+
+        let value = self.parse_expr(session, events, false)?;
+        let value = self.push_expr(session, value)?;
+
+        Self::consume_list_end(events)?;
+        Ok(Expression::Bind { kind, name, value }.scopy(p_span))
+    }
+
+    fn parse_callable(
+        &mut self,
+        session: &mut Session,
+        events: &mut dyn EventEmitter,
+        includes_name: bool,
+    ) -> Result<(Option<SymbolId>, ParamRange, ExpressionId), SParserError> {
+        events.next()?; // consume "fn" / "def-macro"
+
+        let name = if includes_name {
+            let name = events.next()?;
+            if let Event::Symbol(name) = name.value {
+                Some(session.push_symbol(&name))
+            } else {
+                return error!(ExpectedSymbol, name.span);
+            }
+        } else {
+            None
+        };
+
+        let list_start = events.next()?;
         if list_start.value != Event::ListStart {
             return error!(ExpectedFunctionParams, list_start.span);
         }
@@ -212,7 +344,7 @@ impl Parser {
         // make sure no recursive parsing happens before ParamRange::new()
         let params_start = session.get_n_params();
         loop {
-            let event = reader.next()?;
+            let event = events.next()?;
             match event.value {
                 Event::ListEnd => break,
                 Event::Symbol(name) if ReservedSymbols::matches(&name) => {
@@ -225,68 +357,30 @@ impl Parser {
                 _ => return error!(ExpectedSymbol, event.span),
             }
         }
+
         let param_range = ParamRange::new(params_start, session.get_n_params());
+        let body = self.parse_expr(session, events, false)?;
+        let body = self.push_expr(session, body)?;
 
-        let body = self.parse_expression(session, reader)?;
-
-        Self::consume_list_end(reader)?;
-        self.push_expression(session, Expression::Fn { params: param_range, body }, parent_span)
+        Self::consume_list_end(events)?;
+        Ok((name, param_range, body))
     }
 
-    fn parse_def_or_set(
-        &mut self,
-        session: &mut Session,
-        reader: &mut Reader<'_>,
-        parent_span: Span,
-        is_def: bool,
-    ) -> Result<ExpressionId, SParserError> {
-        reader.next()?; // consume "def" / "set"
-
-        let name = reader.next()?;
-        let name = match name.value {
-            Event::Symbol(name) if !ReservedSymbols::matches(&name) => session.push_symbol(&name),
-            Event::Symbol(_) => return error!(UnexpectedReservedSymbol, name.span),
-            _ => return error!(ExpectedSymbol, name.span),
-        };
-
-        let value = self.parse_expression(session, reader)?;
-
-        Self::consume_list_end(reader)?;
-
-        if is_def {
-            self.push_expression(session, Expression::Def { name, value }, parent_span)
-        } else {
-            self.push_expression(session, Expression::Set { name, value }, parent_span)
-        }
-    }
-
-    fn parse_quote(
-        &mut self,
-        session: &mut Session,
-        reader: &mut Reader<'_>,
-        _parent_span: Span,
-    ) -> Result<ExpressionId, SParserError> {
-        reader.next()?; // consume "quote"
-        let value = self.parse_expression_quoted(session, reader)?;
-        Self::consume_list_end(reader)?;
-        Ok(value)
-    }
-
-    fn consume_list_end(reader: &mut Reader<'_>) -> Result<(), SParserError> {
-        let event = reader.next()?;
+    fn consume_list_end(events: &mut dyn EventEmitter) -> Result<(), SParserError> {
+        let event = events.next()?;
         if event.value != Event::ListEnd {
             return error!(ExpectedListEnd, event.span);
         }
         Ok(())
     }
 
-    fn push_expression(
+    fn push_expr(
         &mut self,
         session: &mut Session,
-        expression: Expression,
-        span: Span,
+        expression: SExpression,
+        // span: Span,
     ) -> Result<ExpressionId, SParserError> {
-        Ok(session.push_expression(expression.scopy(span)))
+        Ok(session.push_expression(expression))
     }
 
     fn push_scratch(&mut self, session: &mut Session, start: usize) -> ExpressionRange {
@@ -303,6 +397,7 @@ impl ReservedSymbols {
     const IF: &'static str = "if";
     const FN: &'static str = "fn";
     const DEF: &'static str = "def";
+    const DEF_MACRO: &'static str = "def-macro";
     const SET: &'static str = "set";
     const QUOTE: &'static str = "quote";
     const NULL: &'static str = "null";
@@ -316,6 +411,7 @@ impl ReservedSymbols {
                 | ReservedSymbols::IF
                 | ReservedSymbols::FN
                 | ReservedSymbols::DEF
+                | ReservedSymbols::DEF_MACRO
                 | ReservedSymbols::SET
                 | ReservedSymbols::QUOTE
                 | ReservedSymbols::NULL
@@ -327,32 +423,42 @@ impl ReservedSymbols {
 
 pub type SParserError = Spanned<ParserError>;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParserError {
-    ReaderError(ReaderError),
+    ReaderError(Box<EventError>),
+    ExpansionError(Box<RuntimeError>),
     ExpectedListEnd,
     ExpectedSymbol,
     ExpectedFunctionParams,
     UnexpectedListEnd,
     UnexpectedSourceEnd,
     UnexpectedReservedSymbol,
+    UnexpectedMacroDefinition,
+    MacroAlreadyDefined,
 }
 
-impl From<Spanned<ReaderError>> for Spanned<ParserError> {
-    fn from(error: Spanned<ReaderError>) -> Self {
-        ParserError::ReaderError(error.value).scopy(error.span)
+impl From<SEventError> for SParserError {
+    fn from(error: SEventError) -> Self {
+        ParserError::ReaderError(Box::new(error.value)).scopy(error.span)
+    }
+}
+
+impl From<SRuntimeError> for SParserError {
+    fn from(error: SRuntimeError) -> Self {
+        ParserError::ExpansionError(Box::new(error.value)).scopy(error.span)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use {super::*, crate::expression::OwnedExpression};
+    use {
+        super::*,
+        crate::{expression::OwnedExpression, frontend::string_reader::StringReader},
+    };
 
     macro_rules! expressions {
-        ($($kind:ident $( $args:tt )?),* $(,)?) => {
-            Ok::<Vec<OwnedExpression>, SParserError>(
-                vec![$(expressions!(@expr $kind $( $args )?)),*]
-            )
+        ($($kind:ident $( ( $($args:tt)* ) )?),* $(,)?) => {
+            Ok(vec![$(expressions!(@expr $kind $( ( $($args)* ) )?)),*])
         };
 
         (@expr Null) => { OwnedExpression::Null };
@@ -395,8 +501,9 @@ mod tests {
             }
         };
 
-        (@expr Define($name:expr, $value:ident $( $value_args:tt )? $(,)?)) => {
-            OwnedExpression::Def {
+        (@expr Def($name:expr, $value:ident $( $value_args:tt )? $(,)?)) => {
+            OwnedExpression::Bind {
+                kind: BindKind::Def,
                 name: $name.into(),
                 value: Box::new(expressions!(@expr $value $( $value_args )?)),
             }
@@ -407,7 +514,8 @@ mod tests {
 
     fn parse_str_to_expressions(source: &str) -> Result<Vec<OwnedExpression>, SParserError> {
         let mut session = Session::new();
-        let roots = Parser::new().parse(&mut session, &mut Reader::new(source))?;
+        let roots =
+            Parser::new(&mut session).parse(&mut session, &mut StringReader::new(source))?;
         Ok(session.get_expressions(roots).iter().map(|id| (*id).to_owned(&session)).collect())
     }
 
@@ -463,22 +571,43 @@ mod tests {
 
     #[test]
     fn test_define() {
-        assert_eq!(parse_str_to_expressions("(def x 42)"), expressions!(Define("x", Integer(42))))
+        assert_eq!(parse_str_to_expressions("(def x 42)"), expressions!(Def("x", Integer(42))))
     }
 
     #[test]
     fn test_quote_a() {
         assert_eq!(
-            parse_str_to_expressions("'(1 2 3)"),
-            expressions!(List(Integer(1), Integer(2), Integer(3)))
+            parse_str_to_expressions("'(do 1 2 3)"),
+            expressions!(List(SymbolQ("do"), Integer(1), Integer(2), Integer(3)))
         )
     }
 
     #[test]
     fn test_quote_b() {
         assert_eq!(
-            parse_str_to_expressions("(quote (1 2 3))"),
-            expressions!(List(Integer(1), Integer(2), Integer(3)))
+            parse_str_to_expressions("(quote (do 1 2 3))"),
+            expressions!(List(SymbolQ("do"), Integer(1), Integer(2), Integer(3)))
+        )
+    }
+
+    #[test]
+    fn test_quote_double_a() {
+        assert_eq!(parse_str_to_expressions("'x"), expressions!(SymbolQ("x")))
+    }
+
+    #[test]
+    fn test_quote_double_b() {
+        assert_eq!(
+            parse_str_to_expressions("''x"),
+            expressions!(List(SymbolQ("quote"), SymbolQ("x")))
+        )
+    }
+
+    #[test]
+    fn test_macro_a() {
+        assert_eq!(
+            parse_str_to_expressions("(def-macro inc (x) (do (+ x 1))) (inc 1)"),
+            expressions!(Null, Integer(2))
         )
     }
 
@@ -486,7 +615,7 @@ mod tests {
     fn test_reader_error() {
         assert_eq!(
             parse_str_to_expressions("\""),
-            Err(ReaderError::UnterminatedString.sbetween(0, 1).into())
+            Err(EventError::UnterminatedString.sbetween(0, 1).into())
         );
     }
 

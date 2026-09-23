@@ -13,3 +13,17 @@ pub enum Event {
     String(String), // TODO: str?
     SourceEnd,
 }
+
+pub trait EventEmitter {
+    fn peek(&self) -> Result<&SEvent, SEventError>;
+    fn next(&mut self) -> Result<SEvent, SEventError>;
+}
+
+pub type SEventError = Spanned<EventError>;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EventError {
+    UnexpectedEscapeSequence,
+    UnterminatedString,
+    UnexpectedValue,
+}

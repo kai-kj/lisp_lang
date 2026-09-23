@@ -19,13 +19,19 @@ pub enum Expression {
     Float(f64),
     String(StringRange),
     Symbol(SymbolId),
+    SymbolQ(SymbolId),
     List(ExpressionRange),
     Do(ExpressionRange),
     Call { call: ExpressionId, args: ExpressionRange },
     If { cond: ExpressionId, t_branch: ExpressionId, f_branch: ExpressionId },
     Fn { params: ParamRange, body: ExpressionId },
-    Def { name: SymbolId, value: ExpressionId },
-    Set { name: SymbolId, value: ExpressionId },
+    Bind { kind: BindKind, name: SymbolId, value: ExpressionId },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BindKind {
+    Def,
+    Set,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -74,6 +80,7 @@ pub enum OwnedExpression {
     Float(f64),
     String(String),
     Symbol(String),
+    SymbolQ(String),
     List(Vec<OwnedExpression>),
     Do(Vec<OwnedExpression>),
     Call {
@@ -89,11 +96,8 @@ pub enum OwnedExpression {
         args: Vec<String>,
         body: Box<OwnedExpression>,
     },
-    Def {
-        name: String,
-        value: Box<OwnedExpression>,
-    },
-    Set {
+    Bind {
+        kind: BindKind,
         name: String,
         value: Box<OwnedExpression>,
     },
@@ -110,6 +114,7 @@ impl ExpressionId {
             Expression::Float(v) => OwnedExpression::Float(v),
             Expression::String(v) => OwnedExpression::String(session.get_string(v).to_string()),
             Expression::Symbol(v) => OwnedExpression::Symbol(session.get_symbol(v).to_string()),
+            Expression::SymbolQ(v) => OwnedExpression::SymbolQ(session.get_symbol(v).to_string()),
             Expression::List(v) => OwnedExpression::List(
                 session.get_expressions(v).iter().map(|id| (*id).to_owned(session)).collect(),
             ),
@@ -137,11 +142,8 @@ impl ExpressionId {
                     .collect(),
                 body: Box::new(body.to_owned(session)),
             },
-            Expression::Def { name, value } => OwnedExpression::Def {
-                name: session.get_symbol(name).to_string(),
-                value: Box::new(value.to_owned(session)),
-            },
-            Expression::Set { name, value } => OwnedExpression::Set {
+            Expression::Bind { kind, name, value } => OwnedExpression::Bind {
+                kind,
                 name: session.get_symbol(name).to_string(),
                 value: Box::new(value.to_owned(session)),
             },

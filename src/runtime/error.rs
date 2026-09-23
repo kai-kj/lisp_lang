@@ -7,16 +7,17 @@ pub type SRuntimeError = Spanned<RuntimeError>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeError {
-    ParserError(ParserError),
+    ParserError(Box<ParserError>),
     UnexpectedParamCount,
     UnexpectedParamType,
-    // VariableAlreadyDefined,
+    VariableAlreadyDefined,
     VariableNotDefined,
     NotAFunction,
+    UnexpectedMacro,
 }
 
 impl From<SParserError> for SRuntimeError {
     fn from(error: SParserError) -> Self {
-        RuntimeError::ParserError(error.value).scopy(error.span)
+        RuntimeError::ParserError(Box::new(error.value)).scopy(error.span)
     }
 }
