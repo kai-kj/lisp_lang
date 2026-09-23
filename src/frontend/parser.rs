@@ -49,7 +49,7 @@ impl Parser {
             Event::ListStart => return self.parse_list(session, reader, event.span),
             Event::ListEnd => return error!(UnexpectedListEnd, event.span),
             Event::SourceEnd => return error!(UnexpectedSourceEnd, event.span),
-            Event::Quote => panic!("Not implemented yet"),
+            Event::Quote => return self.parse_expression_quoted(session, reader),
             Event::Symbol(name) if name == ReservedSymbols::NULL => Expression::Null,
             Event::Symbol(name) if name == ReservedSymbols::TRUE => Expression::Boolean(true),
             Event::Symbol(name) if name == ReservedSymbols::FALSE => Expression::Boolean(false),
@@ -59,7 +59,28 @@ impl Parser {
             Event::Symbol(name) => Expression::Symbol(session.push_symbol(&name)),
             Event::Integer(value) => Expression::Integer(value),
             Event::Float(value) => Expression::Float(value),
-            Event::String(value) => Expression::String(session.push_string(value)),
+            Event::String(value) => Expression::String(session.push_string(&value)),
+        };
+
+        self.push_expression(session, result, event.span)
+    }
+
+    fn parse_expression_quoted(
+        &mut self,
+        session: &mut Session,
+        reader: &mut Reader<'_>,
+    ) -> Result<ExpressionId, SParserError> {
+        let event = reader.next()?;
+
+        let result = match event.value {
+            Event::ListStart => return self.parse_list_quoted(session, reader, event.span),
+            Event::ListEnd => return error!(UnexpectedListEnd, event.span),
+            Event::Quote => Expression::Symbol(session.push_symbol("quote")),
+            Event::Symbol(v) => Expression::Symbol(session.push_symbol(&v)),
+            Event::Integer(v) => Expression::Integer(v),
+            Event::Float(v) => Expression::Float(v),
+            Event::String(v) => Expression::String(session.push_string(&v)),
+            Event::SourceEnd => return error!(UnexpectedSourceEnd, event.span),
         };
 
         self.push_expression(session, result, event.span)
@@ -87,7 +108,9 @@ impl Parser {
             Event::Symbol(v) if v == ReservedSymbols::SET => {
                 self.parse_def_or_set(session, reader, parent_span, false)?
             }
-            Event::Symbol(v) if v == ReservedSymbols::QUOTE => panic!("quote not supported yet"),
+            Event::Symbol(v) if v == ReservedSymbols::QUOTE => {
+                self.parse_quote(session, reader, parent_span)?
+            }
             Event::ListEnd => {
                 reader.next()?; // consume list end
                 self.push_expression(session, Expression::Null, parent_span)?
@@ -96,6 +119,25 @@ impl Parser {
         };
 
         Ok(result)
+    }
+
+    fn parse_list_quoted(
+        &mut self,
+        session: &mut Session,
+        reader: &mut Reader<'_>,
+        parent_span: Span,
+    ) -> Result<ExpressionId, SParserError> {
+        let scratch_start = self.scratch.len();
+
+        while reader.peek()?.value != Event::ListEnd {
+            let child = self.parse_expression_quoted(session, reader)?;
+            self.scratch.push(child);
+        }
+
+        let body = self.push_scratch(session, scratch_start);
+
+        Self::consume_list_end(reader)?;
+        self.push_expression(session, Expression::List(body), parent_span)
     }
 
     fn parse_do(
@@ -218,6 +260,18 @@ impl Parser {
         }
     }
 
+    fn parse_quote(
+        &mut self,
+        session: &mut Session,
+        reader: &mut Reader<'_>,
+        _parent_span: Span,
+    ) -> Result<ExpressionId, SParserError> {
+        reader.next()?; // consume "quote"
+        let value = self.parse_expression_quoted(session, reader)?;
+        Self::consume_list_end(reader)?;
+        Ok(value)
+    }
+
     fn consume_list_end(reader: &mut Reader<'_>) -> Result<(), SParserError> {
         let event = reader.next()?;
         if event.value != Event::ListEnd {
@@ -302,6 +356,14 @@ mod tests {
         };
 
         (@expr Null) => { OwnedExpression::Null };
+
+        (@expr Quote($kind:ident $( $args:tt )?)) => {
+            OwnedExpression::Quote(Box::new(expressions!(@expr $kind $( $args )?)))
+        };
+
+        (@expr List($($kind:ident $( $args:tt )?),* $(,)?)) => {
+            OwnedExpression::List(vec![$(expressions!(@expr $kind $( $args )?)),*])
+        };
 
         (@expr Do($($kind:ident $( $args:tt )?),* $(,)?)) => {
             OwnedExpression::Do(vec![$(expressions!(@expr $kind $( $args )?)),*])
@@ -402,6 +464,22 @@ mod tests {
     #[test]
     fn test_define() {
         assert_eq!(parse_str_to_expressions("(def x 42)"), expressions!(Define("x", Integer(42))))
+    }
+
+    #[test]
+    fn test_quote_a() {
+        assert_eq!(
+            parse_str_to_expressions("'(1 2 3)"),
+            expressions!(List(Integer(1), Integer(2), Integer(3)))
+        )
+    }
+
+    #[test]
+    fn test_quote_b() {
+        assert_eq!(
+            parse_str_to_expressions("(quote (1 2 3))"),
+            expressions!(List(Integer(1), Integer(2), Integer(3)))
+        )
     }
 
     #[test]

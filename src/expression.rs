@@ -10,7 +10,6 @@ use {
 pub type SExpression = Spanned<Expression>;
 pub type ExpressionId = ArenaId<SExpression>;
 pub type ExpressionRange = ArenaRange<SExpression>;
-pub type StringId = ArenaId<String>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Expression {
@@ -18,30 +17,15 @@ pub enum Expression {
     Boolean(bool),
     Integer(i64),
     Float(f64),
-    String(StringId),
+    String(StringRange),
     Symbol(SymbolId),
+    List(ExpressionRange),
     Do(ExpressionRange),
-    Call {
-        call: ExpressionId,
-        args: ExpressionRange,
-    },
-    If {
-        cond: ExpressionId,
-        t_branch: ExpressionId,
-        f_branch: ExpressionId,
-    },
-    Fn {
-        params: ParamRange,
-        body: ExpressionId,
-    },
-    Def {
-        name: SymbolId,
-        value: ExpressionId,
-    },
-    Set {
-        name: SymbolId,
-        value: ExpressionId,
-    },
+    Call { call: ExpressionId, args: ExpressionRange },
+    If { cond: ExpressionId, t_branch: ExpressionId, f_branch: ExpressionId },
+    Fn { params: ParamRange, body: ExpressionId },
+    Def { name: SymbolId, value: ExpressionId },
+    Set { name: SymbolId, value: ExpressionId },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +63,7 @@ pub struct SymbolId(usize);
 
 #[cfg(test)]
 use crate::runtime::session::Session;
+use crate::runtime::session::StringRange;
 
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
@@ -89,6 +74,7 @@ pub enum OwnedExpression {
     Float(f64),
     String(String),
     Symbol(String),
+    List(Vec<OwnedExpression>),
     Do(Vec<OwnedExpression>),
     Call {
         call: Box<OwnedExpression>,
@@ -124,6 +110,9 @@ impl ExpressionId {
             Expression::Float(v) => OwnedExpression::Float(v),
             Expression::String(v) => OwnedExpression::String(session.get_string(v).to_string()),
             Expression::Symbol(v) => OwnedExpression::Symbol(session.get_symbol(v).to_string()),
+            Expression::List(v) => OwnedExpression::List(
+                session.get_expressions(v).iter().map(|id| (*id).to_owned(session)).collect(),
+            ),
             Expression::Do(body) => OwnedExpression::Do(
                 session.get_expressions(body).iter().map(|id| (*id).to_owned(session)).collect(),
             ),

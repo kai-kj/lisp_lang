@@ -1,6 +1,9 @@
-use crate::runtime::{
-    error::RuntimeError,
-    value::{BuiltinFunction, Value},
+use {
+    crate::runtime::{
+        error::RuntimeError,
+        value::{BuiltinFunction, Value},
+    },
+    std::rc::Rc,
 };
 
 macro_rules! get_args {
@@ -27,23 +30,23 @@ pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFunction)> {
     vec![
         (
             "and",
-            BuiltinFunction::new(&["a", "b"], |session, args| {
+            BuiltinFunction::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
-                if !a.is_truthy(session) { Ok(*b) } else { Ok(*a) }
+                if !a.is_truthy() { Ok(b.clone()) } else { Ok(a.clone()) }
             }),
         ),
         (
             "or",
-            BuiltinFunction::new(&["a", "b"], |session, args| {
+            BuiltinFunction::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
-                if a.is_truthy(session) { Ok(*a) } else { Ok(*b) }
+                if a.is_truthy() { Ok(a.clone()) } else { Ok(b.clone()) }
             }),
         ),
         (
             "not",
-            BuiltinFunction::new(&["a"], |session, args| {
+            BuiltinFunction::new(&["a"], |_, args| {
                 get_args!(args; a);
-                if a.is_truthy(session) { Ok(false.into()) } else { Ok(true.into()) }
+                if a.is_truthy() { Ok(false.into()) } else { Ok(true.into()) }
             }),
         ),
         (
@@ -67,8 +70,7 @@ pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFunction)> {
                 numerical_bin_op!(
                     a, b, *,
                     (Value::String(a), Value::Integer(b)) => {
-                        let a = session.get_string(*a);
-                        Ok(Value::String(session.push_string(a.repeat(*b as usize))))
+                        Ok(Value::String(Rc::new(a.repeat(*b as usize))))
                     },
                 )
             }),
@@ -82,16 +84,14 @@ pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFunction)> {
         ),
         (
             "=",
-            BuiltinFunction::new(&["a", "b"], |session, args| {
+            BuiltinFunction::new(&["a", "b"], |_, args| {
                 get_args!(args; a, b);
                 match (a, b) {
                     (Value::Null, Value::Null) => Ok(Value::Boolean(true)),
                     (Value::Boolean(a), Value::Boolean(b)) => Ok((a == b).into()),
                     (Value::Integer(a), Value::Integer(b)) => Ok((a == b).into()),
                     (Value::Float(a), Value::Float(b)) => Ok((a == b).into()),
-                    (Value::String(a), Value::String(b)) => {
-                        Ok((session.get_string(*a) == session.get_string(*b)).into())
-                    }
+                    (Value::String(a), Value::String(b)) => Ok((a == b).into()),
                     (Value::BuiltinFunction(a), Value::BuiltinFunction(b)) => Ok((a == b).into()),
                     (Value::UserFunction(a), Value::UserFunction(b)) => Ok((a == b).into()),
                     _ => Ok(false.into()),

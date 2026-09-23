@@ -1,77 +1,51 @@
 use {
     crate::{
         expression::SymbolId,
-        runtime::{
-            error::RuntimeError,
-            session::{EnvironmentId, Session},
-            value::Value,
-        },
+        runtime::{error::RuntimeError, value::Value},
     },
-    std::collections::HashMap,
+    std::{cell::RefCell, collections::HashMap, rc::Rc},
 };
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Environment {
-    parent: Option<EnvironmentId>,
-    binds: HashMap<SymbolId, Value>,
+    parent: Option<Rc<Environment>>,
+    binds: RefCell<HashMap<SymbolId, Value>>,
 }
 
 impl Environment {
-    pub fn new() -> Self {
-        Self { parent: None, binds: HashMap::new() }
+    pub fn new() -> Rc<Self> {
+        Rc::new(Self { parent: None, binds: RefCell::new(HashMap::new()) })
     }
 
-    pub fn child(parent: EnvironmentId) -> Self {
-        Self { parent: Some(parent), binds: HashMap::new() }
+    pub fn child(self: &Rc<Environment>) -> Rc<Self> {
+        Rc::new(Self { parent: Some(self.clone()), binds: RefCell::new(HashMap::new()) })
     }
 
-    pub fn def(
-        session: &mut Session,
-        environment: EnvironmentId,
-        name: SymbolId,
-        value: Value,
-    ) -> Result<(), RuntimeError> {
-        let environment = session.get_environment_mut(environment);
-        environment.binds.insert(name, value);
+    pub fn def(self: &Rc<Environment>, name: SymbolId, value: Value) -> Result<(), RuntimeError> {
+        self.binds.borrow_mut().insert(name, value);
         Ok(())
     }
 
-    pub fn set(
-        session: &mut Session,
-        mut environment_id: EnvironmentId,
-        name: SymbolId,
-        value: Value,
-    ) -> Result<(), RuntimeError> {
-        loop {
-            let environment = session.get_environment_mut(environment_id);
+    pub fn set(self: &Rc<Environment>, name: SymbolId, value: Value) -> Result<(), RuntimeError> {
+        if self.binds.borrow().contains_key(&name) {
+            self.binds.borrow_mut().insert(name, value);
+            return Ok(());
+        }
 
-            if environment.binds.contains_key(&name) {
-                environment.binds.insert(name, value);
-                return Ok(());
-            } else if let Some(parent_id) = &environment.parent {
-                environment_id = *parent_id;
-            } else {
-                break;
-            }
+        if let Some(parent) = &self.parent {
+            return parent.set(name, value);
         }
 
         Err(RuntimeError::VariableNotDefined)
     }
 
-    pub fn get(
-        session: &Session,
-        mut environment_id: EnvironmentId,
-        name: SymbolId,
-    ) -> Result<Value, RuntimeError> {
-        loop {
-            let environment = session.get_environment(environment_id);
+    pub fn get(self: &Rc<Environment>, name: SymbolId) -> Result<Value, RuntimeError> {
+        if let Some(v) = self.binds.borrow().get(&name) {
+            return Ok(v.clone());
+        }
 
-            if let Some(v) = environment.binds.get(&name) {
-                return Ok(*v);
-            } else if let Some(parent_id) = &environment.parent {
-                environment_id = *parent_id;
-            } else {
-                break;
-            }
+        if let Some(parent) = &self.parent {
+            return parent.get(name);
         }
 
         Err(RuntimeError::VariableNotDefined)

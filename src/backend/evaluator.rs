@@ -1,29 +1,31 @@
-use crate::{
-    expression::{Expression, ExpressionId, ExpressionRange},
-    runtime::{
-        environment::Environment,
-        error::{RuntimeError, SRuntimeError},
-        session::{EnvironmentId, Session},
-        value::{BuiltinFunction, UserFunction, Value},
+use {
+    crate::{
+        expression::{Expression, ExpressionId, ExpressionRange},
+        runtime::{
+            environment::Environment,
+            error::{RuntimeError, SRuntimeError},
+            session::Session,
+            value::{BuiltinFunction, UserFunction, Value},
+        },
+        span::{ResultSpannedExt, SpannedExt},
     },
-    span::{ResultSpannedExt, SpannedExt},
+    std::rc::Rc,
 };
 
 pub struct Evaluator {
-    root_env: EnvironmentId,
+    root_env: Rc<Environment>,
 }
 
 impl Evaluator {
     pub fn new(
         session: &mut Session,
-        builtins: &[(&'static str, BuiltinFunction)],
+        builtins: Vec<(&'static str, BuiltinFunction)>,
     ) -> Result<Self, RuntimeError> {
-        let root_env = session.push_environment(Environment::new());
+        let root_env = Environment::new();
 
         for (name, builtin) in builtins {
             let name = session.push_symbol(name);
-            let builtin = session.push_builtin_function(*builtin);
-            Environment::def(session, root_env, name, Value::BuiltinFunction(builtin))?;
+            root_env.def(name, Value::BuiltinFunction(Rc::new(builtin)))?;
         }
 
         Ok(Self { root_env })
@@ -36,7 +38,7 @@ impl Evaluator {
     ) -> Result<Value, SRuntimeError> {
         let mut result = Value::Null;
         for expression in session.get_expressions(expressions).to_owned() {
-            result = self.evaluate_expression(session, self.root_env, expression)?;
+            result = self.evaluate_expression(session, &self.root_env, expression)?;
         }
         Ok(result)
     }
@@ -44,18 +46,30 @@ impl Evaluator {
     fn evaluate_expression(
         &self,
         session: &mut Session,
-        env: EnvironmentId,
+        env: &Rc<Environment>,
         expression: ExpressionId,
     ) -> Result<Value, SRuntimeError> {
-        let expression = session.get_expression(expression);
+        let expression = *session.get_expression(expression);
 
         match expression.value {
             Expression::Null => Ok(Value::Null),
             Expression::Boolean(v) => Ok(Value::Boolean(v)),
             Expression::Integer(v) => Ok(Value::Integer(v)),
             Expression::Float(v) => Ok(Value::Float(v)),
-            Expression::String(v) => Ok(Value::String(v)),
-            Expression::Symbol(v) => Environment::get(session, env, v).err_scopy(expression.span),
+            Expression::String(v) => Ok(Value::String(Rc::new(session.get_string(v).to_string()))),
+            Expression::Symbol(v) => env.get(v).err_scopy(expression.span),
+            Expression::List(v) => {
+                let items = session.get_expressions(v).to_owned();
+                if items.is_empty() {
+                    Ok(Value::Null)
+                } else {
+                    let items = items
+                        .iter()
+                        .map(|e| self.evaluate_expression(session, env, *e))
+                        .collect::<Result<Vec<Value>, SRuntimeError>>()?;
+                    Ok(Value::List(Rc::new(items)))
+                }
+            }
             Expression::Do(expressions) => {
                 let mut result = Value::Null;
                 let expression = session.get_expressions(expressions).to_owned();
@@ -76,53 +90,46 @@ impl Evaluator {
 
                 match call {
                     Value::BuiltinFunction(function) => {
-                        let function = session.get_builtin_function(function);
                         if args.len() != function.params.len() {
                             return Err(RuntimeError::UnexpectedParamCount.scopy(expression.span));
                         }
                         (function.body)(session, &args).err_scopy(expression.span)
                     }
                     Value::UserFunction(function) => {
-                        let function = session.get_user_function(function);
                         let params = session.get_params(function.params).to_vec();
-                        let fn_env = session.push_environment(Environment::child(function.env));
+                        let fn_env = function.env.child();
 
                         if args.len() != params.len() {
                             return Err(RuntimeError::UnexpectedParamCount.scopy(expression.span));
                         }
 
                         for (name, value) in params.into_iter().zip(args.into_iter()) {
-                            Environment::def(session, fn_env, name, value)
-                                .err_scopy(expression.span)?;
+                            fn_env.def(name, value).err_scopy(expression.span)?;
                         }
 
-                        self.evaluate_expression(session, fn_env, function.body)
+                        self.evaluate_expression(session, &fn_env, function.body)
                     }
                     _ => Err(RuntimeError::NotAFunction.scopy(expression.span)),
                 }
             }
             Expression::If { cond, t_branch, f_branch } => {
-                if self.evaluate_expression(session, env, cond)?.is_truthy(session) {
+                if self.evaluate_expression(session, env, cond)?.is_truthy() {
                     self.evaluate_expression(session, env, t_branch)
                 } else {
                     self.evaluate_expression(session, env, f_branch)
                 }
             }
             Expression::Fn { params, body } => {
-                Ok(Value::UserFunction(session.push_user_function(UserFunction {
-                    params,
-                    body,
-                    env,
-                })))
+                Ok(Value::UserFunction(Rc::new(UserFunction { params, body, env: env.clone() })))
             }
             Expression::Def { name, value } => {
                 let value = self.evaluate_expression(session, env, value)?;
-                Environment::def(session, env, name, value).err_scopy(expression.span)?;
+                env.def(name, value).err_scopy(expression.span)?;
                 Ok(Value::Null)
             }
             Expression::Set { name, value } => {
                 let value = self.evaluate_expression(session, env, value)?;
-                Environment::set(session, env, name, value).err_scopy(expression.span)?;
+                env.set(name, value).err_scopy(expression.span)?;
                 Ok(Value::Null)
             }
         }
@@ -142,7 +149,7 @@ mod tests {
     fn eval_str_to_value(source: &str) -> Result<Value, SRuntimeError> {
         let mut session = Session::new();
         let roots = Parser::new().parse(&mut session, &mut Reader::new(source))?;
-        let evaluator = Evaluator::new(&mut session, &make_builtins()).err_sbetween(0, 1)?;
+        let evaluator = Evaluator::new(&mut session, make_builtins()).err_sbetween(0, 1)?;
         evaluator.evaluate(&mut session, roots)
     }
 
@@ -198,6 +205,14 @@ mod tests {
             )
             .unwrap(),
             Value::Integer(3)
+        )
+    }
+
+    #[test]
+    fn test_quote() {
+        assert_eq!(
+            eval_str_to_value("'(1 2 3)").unwrap(),
+            Value::List(Rc::new(vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)]))
         )
     }
 }

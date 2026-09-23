@@ -7,9 +7,9 @@ pub enum Event {
     ListStart,
     ListEnd,
     Quote,
-    Symbol(String),
+    Symbol(String), // TODO: str?
     Integer(i64),
     Float(f64),
-    String(String),
+    String(String), // TODO: str?
     SourceEnd,
 }
