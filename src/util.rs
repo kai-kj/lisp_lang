@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{cell::RefCell, collections::HashMap, hash::Hash, marker::PhantomData, rc::Rc};
 
 macro_rules! impl_copy {
     ($name:ident<$($T:ident),+>) => {
@@ -63,6 +63,56 @@ impl<V> ArenaId<V> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Environment<K: Eq + Hash, V: Clone> {
+    parent: Option<Rc<Environment<K, V>>>,
+    binds: RefCell<HashMap<K, V>>,
+}
+
+impl<K: Eq + Hash, V: Clone> Environment<K, V> {
+    pub fn new() -> Rc<Self> {
+        Rc::new(Self { parent: None, binds: RefCell::new(HashMap::new()) })
+    }
+
+    pub fn child(self: &Rc<Environment<K, V>>) -> Rc<Self> {
+        Rc::new(Self { parent: Some(self.clone()), binds: RefCell::new(HashMap::new()) })
+    }
+
+    pub fn def(self: &Rc<Environment<K, V>>, name: K, value: V) -> Result<(), RuntimeError> {
+        if self.binds.borrow().contains_key(&name) {
+            return Err(RuntimeError::VariableAlreadyDefined);
+        }
+
+        self.binds.borrow_mut().insert(name, value);
+        Ok(())
+    }
+
+    pub fn set(self: &Rc<Environment<K, V>>, name: K, value: V) -> Result<(), RuntimeError> {
+        if self.binds.borrow().contains_key(&name) {
+            self.binds.borrow_mut().insert(name, value);
+            return Ok(());
+        }
+
+        if let Some(parent) = &self.parent {
+            return parent.set(name, value);
+        }
+
+        Err(RuntimeError::VariableNotDefined)
+    }
+
+    pub fn get(self: &Rc<Environment<K, V>>, name: K) -> Result<V, RuntimeError> {
+        if let Some(v) = self.binds.borrow().get(&name) {
+            return Ok(v.clone());
+        }
+
+        if let Some(parent) = &self.parent {
+            return parent.get(name);
+        }
+
+        Err(RuntimeError::VariableNotDefined)
+    }
+}
+
 #[macro_export]
 macro_rules! check {
     ($condition:expr, $error:expr) => {
@@ -71,4 +121,6 @@ macro_rules! check {
         }
     };
 }
+use crate::
+runtime::error::RuntimeError;
 pub use check;

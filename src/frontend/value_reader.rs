@@ -24,16 +24,16 @@ impl EventEmitter for ValueReader {
 }
 
 impl ValueReader {
-    pub fn new(session: &Session, value: Value, span: Span) -> Result<Self, SEventError> {
+    pub fn new(sesh: &Session, value: Value, span: Span) -> Result<Self, SEventError> {
         let mut events = Vec::new();
-        Self::emit(&value, session, span, &mut events)?;
+        Self::emit(&value, sesh, span, &mut events)?;
         events.push(Event::SourceEnd.scopy(span));
         Ok(Self { events, pos: 0 })
     }
 
     fn emit(
         value: &Value,
-        session: &Session,
+        sesh: &Session,
         span: Span,
         events: &mut Vec<SEvent>,
     ) -> Result<(), SEventError> {
@@ -45,12 +45,12 @@ impl ValueReader {
             Value::List(values) => {
                 events.push(Event::ListStart.scopy(span));
                 for value in values.iter() {
-                    Self::emit(value, session, span, events)?;
+                    Self::emit(value, sesh, span, events)?;
                 }
                 events.push(Event::ListEnd.scopy(span));
                 return Ok(());
             }
-            Value::Symbol(symbol) => Event::Symbol(session.get_symbol(*symbol).to_owned()),
+            Value::Symbol(symbol) => Event::Symbol(sesh.get_symbol(*symbol).to_owned()),
             Value::Boolean(true) => Event::Symbol("true".to_string()),
             Value::Boolean(false) => Event::Symbol("false".to_string()),
             Value::Integer(value) => Event::Integer(*value),

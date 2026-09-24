@@ -1,9 +1,6 @@
-use {
-    crate::runtime::{
-        error::RuntimeError,
-        value::{BuiltinFn, Value},
-    },
-    std::rc::Rc,
+use crate::runtime::{
+    error::RuntimeError,
+    value::{BuiltinFn, Value},
 };
 
 macro_rules! get_args {
@@ -14,13 +11,12 @@ macro_rules! get_args {
 }
 
 macro_rules! numerical_bin_op {
-    ($a:expr, $b:expr, $op:tt $(, $pat:pat => $body:expr)* $(,)?) => {
+    ($a:expr, $b:expr, $op:tt) => {
         match ($a, $b) {
             (Value::Integer(a), Value::Integer(b)) => Ok((*a $op *b).into()),
             (Value::Integer(a), Value::Float(b)) => Ok(((*a as f64) $op *b).into()),
             (Value::Float(a), Value::Integer(b)) => Ok((*a $op (*b as f64)).into()),
             (Value::Float(a), Value::Float(b)) => Ok((*a $op *b).into()),
-            $($pat => $body,)*
             _ => Err(RuntimeError::UnexpectedParamType),
         }
     };
@@ -30,61 +26,52 @@ pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFn)> {
     vec![
         (
             "and",
-            BuiltinFn::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], false, |_, args| {
                 get_args!(args; a, b);
                 if !a.is_truthy() { Ok(b.clone()) } else { Ok(a.clone()) }
             }),
         ),
         (
             "or",
-            BuiltinFn::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], false, |_, args| {
                 get_args!(args; a, b);
                 if a.is_truthy() { Ok(a.clone()) } else { Ok(b.clone()) }
             }),
         ),
         (
             "not",
-            BuiltinFn::new(&["a"], |_, args| {
+            BuiltinFn::new(&["a"], false, |_, args| {
                 get_args!(args; a);
                 if a.is_truthy() { Ok(false.into()) } else { Ok(true.into()) }
             }),
         ),
         (
             "+",
-            BuiltinFn::new(&["a", "b"], |_, args| {
-                get_args!(args; a, b);
-                numerical_bin_op!(a, b, +)
+            BuiltinFn::new(&[], true, |_, args| {
+                args.iter().try_fold(0.into(), |sum, value| numerical_bin_op!(&sum, value, +))
             }),
         ),
         (
             "-",
-            BuiltinFn::new(&["a", "b"], |_, args| {
-                get_args!(args; a, b);
-                numerical_bin_op!(a, b, -)
+            BuiltinFn::new(&[], true, |_, args| {
+                args.iter().try_fold(0.into(), |sum, value| numerical_bin_op!(&sum, value, -))
             }),
         ),
         (
             "*",
-            BuiltinFn::new(&["a", "b"], |session, args| {
-                get_args!(args; a, b);
-                numerical_bin_op!(
-                    a, b, *,
-                    (Value::String(a), Value::Integer(b)) => {
-                        Ok(Value::String(Rc::new(a.repeat(*b as usize))))
-                    },
-                )
+            BuiltinFn::new(&[], true, |_, args| {
+                args.iter().try_fold(1.into(), |sum, value| numerical_bin_op!(&sum, value, *))
             }),
         ),
         (
             "/",
-            BuiltinFn::new(&["a", "b"], |_, args| {
-                get_args!(args; a, b);
-                numerical_bin_op!(a, b, /)
+            BuiltinFn::new(&[], true, |_, args| {
+                args.iter().try_fold(1.into(), |sum, value| numerical_bin_op!(&sum, value, /))
             }),
         ),
         (
             "=",
-            BuiltinFn::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], false, |_, args| {
                 get_args!(args; a, b);
                 match (a, b) {
                     (Value::Null, Value::Null) => Ok(Value::Boolean(true)),
@@ -100,43 +87,45 @@ pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFn)> {
         ),
         (
             "<",
-            BuiltinFn::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], false, |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, <)
             }),
         ),
         (
             ">",
-            BuiltinFn::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], false, |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, >)
             }),
         ),
         (
             "<=",
-            BuiltinFn::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], false, |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, <=)
             }),
         ),
         (
             ">=",
-            BuiltinFn::new(&["a", "b"], |_, args| {
+            BuiltinFn::new(&["a", "b"], false, |_, args| {
                 get_args!(args; a, b);
                 numerical_bin_op!(a, b, >=)
             }),
         ),
         (
             "print",
-            BuiltinFn::new(&["value"], |session, args| {
-                get_args!(args; value);
-                print!("{}", value.to_string(session));
+            BuiltinFn::new(&[], true, |sesh, args| {
+                args.iter().try_for_each(|value| {
+                    print!("{}", value.format(sesh));
+                    Ok(())
+                })?;
                 Ok(Value::Null)
             }),
         ),
         (
             "cons",
-            BuiltinFn::new(&["head", "tail"], |_, args| {
+            BuiltinFn::new(&["head", "tail"], false, |_, args| {
                 get_args!(args; head, tail);
                 let mut values = vec![head.clone()];
                 match tail {
@@ -144,7 +133,18 @@ pub fn make_builtins<'s>() -> Vec<(&'static str, BuiltinFn)> {
                     Value::List(tail) => values.extend(tail.iter().cloned()),
                     _ => return Err(RuntimeError::UnexpectedParamType),
                 }
-                Ok(Value::List(Rc::new(values)))
+                Ok(Value::list(values))
+            }),
+        ),
+        (
+            "list",
+            BuiltinFn::new(&[], true, |_, args| {
+                let mut values = vec![];
+                args.iter().try_for_each(|value| {
+                    values.push(value.clone());
+                    Ok(())
+                })?;
+                Ok(Value::list(values))
             }),
         ),
     ]

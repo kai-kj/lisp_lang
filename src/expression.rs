@@ -24,7 +24,8 @@ pub enum Expression {
     Do(ExpressionRange),
     Call { call: ExpressionId, args: ExpressionRange },
     If { cond: ExpressionId, t_branch: ExpressionId, f_branch: ExpressionId },
-    Fn { params: ParamRange, body: ExpressionId },
+    Fn { req_params: ParamRange, rest_param: Option<SymbolId>, body: ExpressionId },
+
     Bind { kind: BindKind, name: SymbolId, value: ExpressionId },
 }
 
@@ -93,7 +94,8 @@ pub enum OwnedExpression {
         f_branch: Box<OwnedExpression>,
     },
     Fn {
-        args: Vec<String>,
+        req_params: Vec<String>,
+        rest_param: Option<String>,
         body: Box<OwnedExpression>,
     },
     Bind {
@@ -106,46 +108,43 @@ pub enum OwnedExpression {
 #[cfg(test)]
 impl ExpressionId {
     #[cfg(test)]
-    pub fn to_owned(self, session: &Session) -> OwnedExpression {
-        match session.get_expression(self).value {
+    pub fn to_owned(self, sesh: &Session) -> OwnedExpression {
+        match sesh.get_expression(self).value {
             Expression::Null => OwnedExpression::Null,
             Expression::Boolean(v) => OwnedExpression::Boolean(v),
             Expression::Integer(v) => OwnedExpression::Integer(v),
             Expression::Float(v) => OwnedExpression::Float(v),
-            Expression::String(v) => OwnedExpression::String(session.get_string(v).to_string()),
-            Expression::Symbol(v) => OwnedExpression::Symbol(session.get_symbol(v).to_string()),
-            Expression::SymbolQ(v) => OwnedExpression::SymbolQ(session.get_symbol(v).to_string()),
+            Expression::String(v) => OwnedExpression::String(sesh.get_string(v).to_string()),
+            Expression::Symbol(v) => OwnedExpression::Symbol(sesh.get_symbol(v).to_string()),
+            Expression::SymbolQ(v) => OwnedExpression::SymbolQ(sesh.get_symbol(v).to_string()),
             Expression::List(v) => OwnedExpression::List(
-                session.get_expressions(v).iter().map(|id| (*id).to_owned(session)).collect(),
+                sesh.get_expressions(v).iter().map(|id| (*id).to_owned(sesh)).collect(),
             ),
             Expression::Do(body) => OwnedExpression::Do(
-                session.get_expressions(body).iter().map(|id| (*id).to_owned(session)).collect(),
+                sesh.get_expressions(body).iter().map(|id| (*id).to_owned(sesh)).collect(),
             ),
             Expression::Call { call, args } => OwnedExpression::Call {
-                call: Box::new(call.to_owned(session)),
-                args: session
-                    .get_expressions(args)
-                    .iter()
-                    .map(|id| (*id).to_owned(session))
-                    .collect(),
+                call: Box::new(call.to_owned(sesh)),
+                args: sesh.get_expressions(args).iter().map(|id| (*id).to_owned(sesh)).collect(),
             },
             Expression::If { cond, t_branch, f_branch } => OwnedExpression::If {
-                cond: Box::new(cond.to_owned(session)),
-                t_branch: Box::new(t_branch.to_owned(session)),
-                f_branch: Box::new(f_branch.to_owned(session)),
+                cond: Box::new(cond.to_owned(sesh)),
+                t_branch: Box::new(t_branch.to_owned(sesh)),
+                f_branch: Box::new(f_branch.to_owned(sesh)),
             },
-            Expression::Fn { params, body } => OwnedExpression::Fn {
-                args: session
-                    .get_params(params)
+            Expression::Fn { req_params, rest_param, body } => OwnedExpression::Fn {
+                req_params: sesh
+                    .get_params(req_params)
                     .iter()
-                    .map(|id| session.get_symbol(*id).to_string())
+                    .map(|id| sesh.get_symbol(*id).to_string())
                     .collect(),
-                body: Box::new(body.to_owned(session)),
+                rest_param: rest_param.map(|id| sesh.get_symbol(id).to_string()),
+                body: Box::new(body.to_owned(sesh)),
             },
             Expression::Bind { kind, name, value } => OwnedExpression::Bind {
                 kind,
-                name: session.get_symbol(name).to_string(),
-                value: Box::new(value.to_owned(session)),
+                name: sesh.get_symbol(name).to_string(),
+                value: Box::new(value.to_owned(sesh)),
             },
         }
     }
