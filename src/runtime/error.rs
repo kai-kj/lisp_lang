@@ -1,5 +1,5 @@
 use crate::{
-    frontend::parser::{ParserError, SParserError},
+    frontend::parser::{ParseError, SParseError},
     span::{Spanned, SpannedExt},
 };
 
@@ -7,17 +7,21 @@ pub type SRuntimeError = Spanned<RuntimeError>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeError {
-    ParserError(Box<ParserError>),
-    UnexpectedParamCount,
-    UnexpectedParamType,
-    VariableAlreadyDefined,
-    VariableNotDefined,
-    NotAFunction,
+    Parse(Box<ParseError>),
+    User(String),
+    InvalidArgCount,
+    InvalidArgType,
+    AlreadyDefinedVariable,
+    UndefinedVariable,
+    NotCallable,
     UnexpectedMacro,
+    IntegerOverflow,
+    DivisionByZero,
+    EmptyList,
 }
 
-impl From<SParserError> for SRuntimeError {
-    fn from(error: SParserError) -> Self {
-        RuntimeError::ParserError(Box::new(error.value)).scopy(error.span)
+impl From<SParseError> for SRuntimeError {
+    fn from(error: SParseError) -> Self {
+        RuntimeError::Parse(Box::new(error.value)).scopy(error.span)
     }
 }

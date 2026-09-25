@@ -7,23 +7,24 @@ pub enum Event {
     ListStart,
     ListEnd,
     Quote,
-    Symbol(String), // TODO: str?
+    Symbol(String),
     Integer(i64),
     Float(f64),
     String(String), // TODO: str?
     SourceEnd,
 }
 
-pub trait EventEmitter {
-    fn peek(&self) -> Result<&SEvent, SEventError>;
-    fn next(&mut self) -> Result<SEvent, SEventError>;
+pub trait Reader {
+    fn peek(&self) -> Result<&SEvent, SReadError>;
+    fn next(&mut self) -> Result<SEvent, SReadError>;
 }
 
-pub type SEventError = Spanned<EventError>;
+pub type SReadError = Spanned<ReadError>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum EventError {
-    UnexpectedEscapeSequence,
+pub enum ReadError {
+    InvalidEscapeSequence,
     UnterminatedString,
-    UnexpectedValue,
+    UnsupportedSyntaxValue,
+    InvalidSymbol,
 }

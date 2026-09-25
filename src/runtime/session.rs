@@ -36,6 +36,10 @@ impl Session {
         self.expressions.push_children(expressions)
     }
 
+    pub fn fresh_symbol(&mut self, name: &str) -> SymbolId {
+        self.symbols.fresh(name)
+    }
+
     pub fn get_symbol(&self, id: SymbolId) -> &str {
         self.symbols.get(id)
     }

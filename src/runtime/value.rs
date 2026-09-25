@@ -24,19 +24,15 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn list(values: Vec<Value>) -> Value {
-        if values.is_empty() { Value::Null } else { Value::List(Rc::new(values)) }
-    }
-
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Null => false,
             Value::Symbol(_) => true,
-            Value::List(_) => true,
+            Value::List(v) => !v.is_empty(),
             Value::Boolean(v) => *v,
             Value::Integer(v) => *v != 0,
             Value::Float(v) => *v != 0.0,
-            Value::String(v) => v.is_empty(),
+            Value::String(v) => !v.is_empty(),
             Value::BuiltinFn(_) => true,
             Value::UserFn(_) => true,
         }

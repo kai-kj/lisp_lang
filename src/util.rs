@@ -80,7 +80,7 @@ impl<K: Eq + Hash, V: Clone> Environment<K, V> {
 
     pub fn def(self: &Rc<Environment<K, V>>, name: K, value: V) -> Result<(), RuntimeError> {
         if self.binds.borrow().contains_key(&name) {
-            return Err(RuntimeError::VariableAlreadyDefined);
+            return Err(RuntimeError::AlreadyDefinedVariable);
         }
 
         self.binds.borrow_mut().insert(name, value);
@@ -97,7 +97,7 @@ impl<K: Eq + Hash, V: Clone> Environment<K, V> {
             return parent.set(name, value);
         }
 
-        Err(RuntimeError::VariableNotDefined)
+        Err(RuntimeError::UndefinedVariable)
     }
 
     pub fn get(self: &Rc<Environment<K, V>>, name: K) -> Result<V, RuntimeError> {
@@ -109,7 +109,7 @@ impl<K: Eq + Hash, V: Clone> Environment<K, V> {
             return parent.get(name);
         }
 
-        Err(RuntimeError::VariableNotDefined)
+        Err(RuntimeError::UndefinedVariable)
     }
 }
 
@@ -121,6 +121,5 @@ macro_rules! check {
         }
     };
 }
-use crate::
-runtime::error::RuntimeError;
+use crate::runtime::error::RuntimeError;
 pub use check;

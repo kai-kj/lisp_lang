@@ -1,5 +1,5 @@
 use crate::{
-    frontend::event::{Event, EventEmitter, EventError, SEvent, SEventError},
+    frontend::event::{Event, ReadError, Reader, SEvent, SReadError},
     runtime::{session::Session, value::Value},
     span::{Span, SpannedExt},
 };
@@ -9,12 +9,12 @@ pub struct ValueReader {
     pos: usize,
 }
 
-impl EventEmitter for ValueReader {
-    fn peek(&self) -> Result<&SEvent, SEventError> {
+impl Reader for ValueReader {
+    fn peek(&self) -> Result<&SEvent, SReadError> {
         Ok(&self.events[self.pos])
     }
 
-    fn next(&mut self) -> Result<SEvent, SEventError> {
+    fn next(&mut self) -> Result<SEvent, SReadError> {
         let event = self.events[self.pos].clone();
         if self.pos + 1 < self.events.len() {
             self.pos += 1;
@@ -24,7 +24,7 @@ impl EventEmitter for ValueReader {
 }
 
 impl ValueReader {
-    pub fn new(sesh: &Session, value: Value, span: Span) -> Result<Self, SEventError> {
+    pub fn new(sesh: &Session, value: Value, span: Span) -> Result<Self, SReadError> {
         let mut events = Vec::new();
         Self::emit(&value, sesh, span, &mut events)?;
         events.push(Event::SourceEnd.scopy(span));
@@ -36,7 +36,7 @@ impl ValueReader {
         sesh: &Session,
         span: Span,
         events: &mut Vec<SEvent>,
-    ) -> Result<(), SEventError> {
+    ) -> Result<(), SReadError> {
         let event = match value {
             Value::Null => {
                 events.push(Event::Symbol("null".to_string()).scopy(span));
@@ -50,14 +50,14 @@ impl ValueReader {
                 events.push(Event::ListEnd.scopy(span));
                 return Ok(());
             }
-            Value::Symbol(symbol) => Event::Symbol(sesh.get_symbol(*symbol).to_owned()),
+            Value::Symbol(symbol) => Event::Symbol(sesh.get_symbol(*symbol).to_string()),
             Value::Boolean(true) => Event::Symbol("true".to_string()),
             Value::Boolean(false) => Event::Symbol("false".to_string()),
             Value::Integer(value) => Event::Integer(*value),
             Value::Float(value) => Event::Float(*value),
             Value::String(value) => Event::String(value.as_ref().clone()),
             Value::BuiltinFn(_) | Value::UserFn(_) => {
-                return Err(EventError::UnexpectedValue.scopy(span));
+                return Err(ReadError::UnsupportedSyntaxValue.scopy(span));
             }
         };
         events.push(event.scopy(span));

@@ -1,12 +1,12 @@
 use crate::{
-    frontend::event::{Event, EventEmitter, EventError, SEvent, SEventError},
+    frontend::event::{Event, ReadError, Reader, SEvent, SReadError},
     span::SpannedExt,
 };
 
 pub struct StringReader<'s> {
     source: &'s str,
     pos: usize,
-    next: Result<SEvent, SEventError>,
+    next: Result<SEvent, SReadError>,
 }
 
 macro_rules! event {
@@ -17,7 +17,7 @@ macro_rules! event {
 
 macro_rules! error {
     ($kind:ident, $start:expr, $end:expr) => {
-        Err(EventError::$kind.sbetween($start, $end))
+        Err(ReadError::$kind.sbetween($start, $end))
     };
 }
 
@@ -28,7 +28,7 @@ impl<'s> StringReader<'s> {
         lexer
     }
 
-    fn scan(&mut self) -> Result<SEvent, SEventError> {
+    fn scan(&mut self) -> Result<SEvent, SReadError> {
         self.advance_while(|_, c| c.is_whitespace());
         let start_pos = self.pos;
 
@@ -66,7 +66,7 @@ impl<'s> StringReader<'s> {
                                 Some('"') => '"',
                                 _ => {
                                     return error!(
-                                        UnexpectedEscapeSequence,
+                                        InvalidEscapeSequence,
                                         sequence_pos,
                                         self.pos + 1
                                     );
@@ -87,6 +87,10 @@ impl<'s> StringReader<'s> {
                 });
 
                 let characters = &self.source[start_pos..self.pos];
+
+                if characters.starts_with('\\') {
+                    return error!(InvalidSymbol, start_pos, self.pos);
+                }
 
                 let possible_number = characters
                     .bytes()
@@ -131,12 +135,12 @@ impl<'s> StringReader<'s> {
     }
 }
 
-impl<'s> EventEmitter for StringReader<'s> {
-    fn peek(&self) -> Result<&SEvent, SEventError> {
+impl<'s> Reader for StringReader<'s> {
+    fn peek(&self) -> Result<&SEvent, SReadError> {
         self.next.as_ref().map_err(|err| *err)
     }
 
-    fn next(&mut self) -> Result<SEvent, SEventError> {
+    fn next(&mut self) -> Result<SEvent, SReadError> {
         let next = self.scan();
         std::mem::replace(&mut self.next, next)
     }
@@ -148,11 +152,13 @@ mod tests {
 
     macro_rules! events {
         ($($kind:ident $(($value:expr))?),* $(,)?) => {
-            Ok(vec![$(Event::$kind $(($value.into()))?),*])
+            Ok(vec![$(events!(@expr $kind $(($value))?)),*])
         };
+
+        (@expr $kind:ident $(($value:expr))?) => {Event::$kind $(($value.into()))?};
     }
 
-    fn read_str_to_event_vec(input: &str) -> Result<Vec<Event>, SEventError> {
+    fn read_str_to_event_vec(input: &str) -> Result<Vec<Event>, SReadError> {
         let mut reader = StringReader::new(input);
         let mut events = vec![];
         loop {
@@ -248,7 +254,7 @@ mod tests {
     fn test_unexpected_escape_sequence() {
         assert_eq!(
             read_str_to_event_vec(r#""Hello, \world!"#),
-            error!(UnexpectedEscapeSequence, 8, 10)
+            error!(InvalidEscapeSequence, 8, 10)
         );
     }
 }

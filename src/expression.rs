@@ -25,7 +25,6 @@ pub enum Expression {
     Call { call: ExpressionId, args: ExpressionRange },
     If { cond: ExpressionId, t_branch: ExpressionId, f_branch: ExpressionId },
     Fn { req_params: ParamRange, rest_param: Option<SymbolId>, body: ExpressionId },
-
     Bind { kind: BindKind, name: SymbolId, value: ExpressionId },
 }
 
@@ -44,6 +43,11 @@ pub struct SymbolTable {
 impl SymbolTable {
     pub fn new() -> Self {
         Self { id_to_name: Vec::new(), name_to_id: HashMap::new() }
+    }
+
+    pub fn fresh(&mut self, name: &str) -> SymbolId {
+        let name = format!("\\fresh\\{}\\{}", name, self.id_to_name.len());
+        self.push(&name)
     }
 
     pub fn push(&mut self, name: &str) -> SymbolId {

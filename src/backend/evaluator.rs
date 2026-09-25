@@ -122,16 +122,13 @@ impl Evaluator {
         env: &Rc<Environment<SymbolId, Value>>,
         values: ExpressionRange,
     ) -> Result<Value, SRuntimeError> {
-        let items = sesh.get_expressions(values).to_owned();
-        if items.is_empty() {
-            Ok(Value::Null)
-        } else {
-            let items = items
+        Ok(Value::List(Rc::new(
+            sesh.get_expressions(values)
+                .to_owned()
                 .iter()
                 .map(|e| self.evaluate_expr(sesh, env, *e))
-                .collect::<Result<Vec<Value>, SRuntimeError>>()?;
-            Ok(Value::list(items))
-        }
+                .collect::<Result<Vec<Value>, SRuntimeError>>()?,
+        )))
     }
 
     fn evaluate_call(
@@ -152,11 +149,11 @@ impl Evaluator {
 
         match call {
             Value::BuiltinFn(f) => {
-                check!(f.accepts(args.len()), error!(UnexpectedParamCount, p_span));
+                check!(f.accepts(args.len()), error!(InvalidArgCount, p_span));
                 (f.body)(sesh, &args).err_scopy(p_span)
             }
             Value::UserFn(f) => self.evaluate_user_fn(sesh, &f, args, p_span),
-            _ => Err(RuntimeError::NotAFunction.scopy(p_span)),
+            _ => Err(RuntimeError::NotCallable.scopy(p_span)),
         }
     }
 
@@ -167,7 +164,7 @@ impl Evaluator {
         args: Vec<Value>,
         p_span: Span,
     ) -> Result<Value, SRuntimeError> {
-        check!(f.accepts(args.len()), error!(UnexpectedParamCount, p_span));
+        check!(f.accepts(args.len()), error!(InvalidArgCount, p_span));
 
         let fn_env = f.env.child();
         let mut args = args.into_iter();
@@ -178,7 +175,7 @@ impl Evaluator {
         }
 
         if let Some(name) = f.rest_param {
-            fn_env.def(name, Value::list(args.collect())).err_scopy(p_span)?;
+            fn_env.def(name, Value::List(Rc::new(args.collect()))).err_scopy(p_span)?;
         }
 
         self.evaluate_expr(session, &fn_env, f.body)
@@ -267,7 +264,7 @@ mod tests {
     fn test_quote() {
         assert_eq!(
             eval_str_to_value("'(1 2 3)").unwrap(),
-            Value::list(vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)])
+            Value::List(Rc::new(vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)]))
         )
     }
 }
